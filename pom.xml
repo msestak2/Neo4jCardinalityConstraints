@@ -4,12 +4,12 @@
   <modelVersion>4.0.0</modelVersion>
 
     <groupId>org.um.martinasestak</groupId>
-    <artifactId>mincardcontraints</artifactId>
-    <version>0.0.1</version>
+    <artifactId>cardinality-constraints</artifactId>
+    <version>0.0.2</version>
 
   <packaging>jar</packaging>
-    <name>Neo4j Procedure for Minimum kCardinality</name>
-  <description>A template project for building a Neo4j Procedure</description>
+    <name>Neo4j Procedure for k-vertex Cardinality Constraints</name>
+  <description>A template project for building Neo4j cardinality constraint procedures</description>
 
   <properties>
     <neo4j.version>3.3.5</neo4j.version>

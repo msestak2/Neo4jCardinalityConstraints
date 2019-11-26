@@ -24,13 +24,15 @@ public class LocalCardinalityConstraint {
 
     public  Number k;
 
+    public Map params;
+
     public  List<LocalCardinalityConstraint> constraints = new ArrayList<>();
 
     public LocalCardinalityConstraint() {
     }
 
 
-    public LocalCardinalityConstraint(long id, String relType, String nodeLabel, Map subgraph, Number minKCard, Number maxKCard, Number k) {
+    public LocalCardinalityConstraint(long id, String relType, String nodeLabel, Map subgraph, Number minKCard, Number maxKCard, Number k, Map params) {
         this._id = id;
         this.relType = relType;
         this.nodeLabel = nodeLabel;
@@ -38,6 +40,7 @@ public class LocalCardinalityConstraint {
         this.minKCard = minKCard;
         this.maxKCard = maxKCard;
         this.k = k;
+        this.params = params;
     }
 
 }

@@ -28,6 +28,8 @@ public class CardinalityConstraint {
 
     public static Number k;
 
+    public static Map params;
+
     public static List<CardinalityConstraint> constraints = new ArrayList<>();
 
     public CardinalityConstraint() {
@@ -40,15 +42,17 @@ public class CardinalityConstraint {
         this.minKCard = c.getMinKCard();
         this.maxKCard = c.getMaxKCard();
         this.k = c.getK();
+        this.params = c.getParams();
     }
 
-    public CardinalityConstraint(String relType, String nodeLabel, Map subgraph, Number minKCard, Number maxKCard, Number k) {
+    public CardinalityConstraint(String relType, String nodeLabel, Map subgraph, Number minKCard, Number maxKCard, Number k, Map params) {
         this.relType = relType;
         this.nodeLabel = nodeLabel;
         this.subgraph = subgraph;
         this.minKCard = minKCard;
         this.maxKCard = maxKCard;
         this.k = k;
+        this.params = params;
     }
 
     @Context
@@ -56,7 +60,7 @@ public class CardinalityConstraint {
 
 
     @Procedure(value = "card_constraint.create_card_constraint", mode = Mode.WRITE)
-    @Description("create cardinality constraint")
+    @Description("create cardinality constraint with props")
     public void createConstraint(@Name("params") Map<String, Object> objectMap) {
         int k = 0;
 
@@ -71,7 +75,7 @@ public class CardinalityConstraint {
 
         System.out.println("K: " + k);
         constraints.add(new CardinalityConstraint(objectMap.get("R").toString(), objectMap.get("E").toString(), (Map)objectMap.get("S"),
-                (long)objectMap.get("min"), (long)objectMap.get("max"), k));
+                (long)objectMap.get("min"), (long)objectMap.get("max"), k, (Map) objectMap.get("params")));
         System.out.println("List K size: " + constraints.size());
 
         objectMap.put("k", k);
@@ -79,10 +83,11 @@ public class CardinalityConstraint {
 
         Gson gson = new Gson();
         String jsonSubgraph = gson.toJson(objectMap.get("S"));
+        String jsonParams = gson.toJson(objectMap.get("params"));
 
         String query = "CREATE (c:Card_Constraint {R: \'"+objectMap.get("R") + "\', E: \'" + objectMap.get("E") +
                 "\', S: \'" + jsonSubgraph + "\', min : " + (long)objectMap.get("min") + ", max: " + (long)objectMap.get("max") +
-                ", k: " + k + "}) RETURN c";
+                ", k: " + k + ", params: \'" + jsonParams + "\'}) RETURN c";
         System.out.println("Query: " + query);
         db.execute(query);
 
@@ -112,4 +117,7 @@ public class CardinalityConstraint {
         return k;
     }
 
+    public Map getParams() {
+        return params;
+    }
 }
