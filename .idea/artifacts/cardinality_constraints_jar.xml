@@ -1,0 +1,9 @@
+<component name="ArtifactManager">
+  <artifact type="jar" name="cardinality-constraints:jar">
+    <output-path>$PROJECT_DIR$/classes/artifacts/cardinality_constraints_jar</output-path>
+    <root id="archive" name="cardinality-constraints.jar">
+      <element id="module-output" name="cardinality-constraints" />
+      <element id="extracted-dir" path="$MAVEN_REPOSITORY$/com/google/code/gson/gson/2.7/gson-2.7.jar" path-in-jar="/" />
+    </root>
+  </artifact>
+</component>

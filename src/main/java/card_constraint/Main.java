@@ -2,7 +2,6 @@ package card_constraint;
 
 import au.com.bytecode.opencsv.CSVReader;
 import com.google.gson.Gson;
-import org.apache.commons.lang3.StringUtils;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Relationship;
@@ -21,6 +20,7 @@ public class Main {
     @Context
     public GraphDatabaseService db;
 
+    /////////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.initialize_parse_csv")
     @Description("parse input data from file by manually parsing CSV file")
     public void initialize_parse_csv() {
@@ -64,8 +64,7 @@ public class Main {
 
     }
 
-    ;
-
+    ////////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.load", mode = Mode.WRITE)
     @Description("create nodes and relationships")
     public void load_simple() {
@@ -78,6 +77,7 @@ public class Main {
         }
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.reset", mode = Mode.WRITE)
     @Description("delete all nodes and relationships")
     public void reset() {
@@ -88,6 +88,7 @@ public class Main {
 
     }
 
+    ///////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.generate", mode = Mode.WRITE)
     @Description("generate nodes and relationships")
     public void generateGraph(@Name("no_nodes")long noNodes, @Name("index")long index) {
@@ -104,6 +105,7 @@ public class Main {
 
     }
 
+    //////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.generateComplete", mode = Mode.WRITE)
     @Description("generate complete graph")
     public void generateCompleteGraph(@Name("no_nodes")long noNodes, @Name("index")long index) {
@@ -112,7 +114,7 @@ public class Main {
 
     }
 
-    //////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.check_constraint", mode = Mode.WRITE)
     @Description("check for relationships in database that break the cardinality constraints")
     public void checkCardinality(@Name("filePath")String path) {
@@ -227,34 +229,24 @@ public class Main {
         }
     }
 
-    /////////////////////////////////////////////////////////////////////////////
+    //////////////////////////////////////////////////////////////////////////////////
     @Procedure(value = "card_constraint.create_relationship", mode = Mode.WRITE)
     @Description("create new relationship")
-    public void createRel(@Name("query") String query, @Name("constraint_mode")String mode) {
-        // "(:Department)-[]->() {Dept_Code: ''})-[:IS_SUBDEPARMENT_OF]->(:Department {Dept_Code: ''})"
-        int numNodes = 0;
-        String inputPattern = "", pathQuery = "";
+    public Stream<Output> createRelationship(@Name("query") String query, @Name("constraint_mode")String mode) {
+        String message = "";
+
+        PatternMatcher matcher = new PatternMatcher();
 
         /**
          * Parse input string and get nodes and relationships
          */
-        Pattern nodesPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
-        Matcher nodesMatcher = nodesPattern.matcher(query);
-        List<String> matches = new ArrayList<>();
+        matcher.parseNodesRelationships(query);
 
-        while(nodesMatcher.find()){
+        String pathQuery = matcher.getPathQuery();
+        String inputPattern = "";
+        List<String> matches = matcher.getMatches();
 
-            if (nodesMatcher.group(1) != null){
-                matches.add(nodesMatcher.group(1));
-                pathQuery += "(" + nodesMatcher.group(1).split(":")[0] + ")-";
-            } else if(nodesMatcher.group(2) != null) {
-                matches.add(nodesMatcher.group(2));
-                pathQuery += "[" + nodesMatcher.group(2) + "]->";
-            }
-
-        }
-
-        pathQuery = pathQuery.substring(0, pathQuery.length()-1);
+        int numNodes = 0;
 
         String firstNode = matches.get(0);
         String dbQueryNoCard = "MATCH ", dbQueryCard = "MATCH ";
@@ -275,6 +267,8 @@ public class Main {
 
             }
         }
+        matcher.setInputPattern(inputPattern);
+
         System.out.println("Input pattern: " + inputPattern);
 
         // no cardinality check
@@ -282,111 +276,150 @@ public class Main {
             System.out.println("[CREATE NO CARDINALITY]");
 
             dbQueryNoCard += " CREATE " + pathQuery;
-            //"MATCH (" + firstNode + ") MERGE " + subPattern + " CREATE " + pathQuery;
             System.out.println("[CREATE] DB query: " + dbQueryNoCard);
             db.execute(dbQueryNoCard);
-            // System.out.println("[CREATE] Created relationship!");
+            message = Output.MESSAGE_TYPE.SUCCESS.text;
         } else{
             /**
              * Retrieve all constraints from database
              */
             System.out.println("[CREATE CARDINALITY]");
-            List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
-            for(LocalCardinalityConstraint c: constraints){
-                if(c.k.intValue() == (numNodes-1)){
+            LocalCardinalityConstraint violatedConstraint = null;
+            boolean isRuleViolated = false;
 
-                    String constraintPattern= "(n1:" + c.nodeLabel + ")-[r1:" + c.relType + "]->";
-                    constraintPattern = buildSubgraphPattern(2, constraintPattern, c.subgraph);
+            /**
+             * Remove conditions to compare patterns
+             */
+            Pattern conditionsPattern = Pattern.compile("\\{(.*?)\\}");
+            Matcher conditionsMatcher = conditionsPattern.matcher(query);
 
-                    /**
-                     * Remove conditions to compare patterns
-                     */
-                    Pattern conditionsPattern = Pattern.compile("\\{(.*?)\\}");
-                    Matcher conditionsMatcher = conditionsPattern.matcher(query);
+            List<String> conditionsList = new ArrayList<>();
 
-                    List<String> conditionsList = new ArrayList<>();
+            while(conditionsMatcher.find()){
+                conditionsList.add(conditionsMatcher.group(1));
+            }
+            String firstNodeCondition = conditionsList.get(0);
+            String lastNodeCondition = conditionsList.get(conditionsList.size()-1);
 
-                    while(conditionsMatcher.find()){
-                        conditionsList.add(conditionsMatcher.group(1));
-                    }
-                    String firstNodeCondition = conditionsList.get(0);
-                    String lastNodeCondition = conditionsList.get(conditionsList.size()-1);
-                    //  System.out.println("Conditions: " + firstNodeCondition + " - " + lastNodeCondition);
+            List<String> keysList = new ArrayList<>();
+            List<String> valuesList = new ArrayList<>();
 
-                    List<String> keysList = new ArrayList<>();
-                    List<String> valuesList = new ArrayList<>();
+            keysList.add(firstNodeCondition.split(":")[0]);
+            keysList.add(lastNodeCondition.split(":")[0]);
+            valuesList.add(firstNodeCondition.split(":|,")[1]);
+            valuesList.add(lastNodeCondition.split(":|,")[1]);
 
-                    keysList.add(firstNodeCondition.split(":")[0]);
-                    keysList.add(lastNodeCondition.split(":")[0]);
-                    valuesList.add(firstNodeCondition.split(":|,")[1]);
-                    valuesList.add(lastNodeCondition.split(":|,")[1]);
+            matcher.removeConditionsFromPattern();
+            inputPattern = matcher.getInputPattern();
+            List<String> nodeTypes = matcher.getNodeTypes();
+            List<String> inputArray = matcher.getInputArray();
 
-                    inputPattern = inputPattern.replaceAll("\\{.*?\\}", "");
-                    inputPattern = inputPattern.replaceAll("\\s", "");
+            for(String nodeType : nodeTypes){
+                List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
-                    Pattern varPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
-                    Matcher varMatcher = varPattern.matcher(inputPattern);
+                for(LocalCardinalityConstraint constraint: constraints) {
 
-                    List<String> variableMatches = new ArrayList<>();
+                    String constraintPattern= "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
+                    constraintPattern = buildSubgraphPattern(2, constraintPattern, constraint.subgraph);
 
-                    while(varMatcher.find()){
-                        if (varMatcher.group(1) != null)
-                            variableMatches.add(varMatcher.group(1).split(":")[0]);
-                        else if(varMatcher.group(2) != null)
-                            variableMatches.add(varMatcher.group(2).split(":")[1]);
-                    }
+                    System.out.println("Constraint pattern: " + constraintPattern);
 
-                    pathQuery += "(" + variableMatches.get(0) + ")-[:" + variableMatches.get(1) + "]->(" + variableMatches.get(2)
-                            + ")";
+                    if (constraint.k.intValue() == (numNodes - 1)) {
+                        String nodeLabel = constraint.nodeLabel;
+                        String relType = constraint.relType;
+                        Map subgraph = constraint.subgraph;
 
-                    if(inputPattern.equals(constraintPattern)){
-                        /**
-                         * Retrieve first node, last node and first relationships labels to retrieve number of relationships
-                         **/
-                        String firstNodeLabel = matches.get(0).split(":")[0];
-                        String firstRelationshipLabel = matches.get(1).split(":")[0];
-                        String lastNodeLabel = matches.get(matches.size()-1).split(":")[0];
+                        String subgraphNode = subgraph.get("E").toString();
 
-                        String countQuery = "";
-                        if(c.k.intValue() == 1){//condition only first node
-                            countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                                    "=" + valuesList.get(0) + " RETURN " + firstNodeLabel + ", COUNT(" +
-                                    firstRelationshipLabel + ")";
-                        } else {
-                            countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                                    "=" + valuesList.get(0) + " AND " + lastNodeLabel + "." + keysList.get(1) + "=" +
-                                    valuesList.get(1) + " RETURN " + firstNodeLabel + ", " + lastNodeLabel +
-                                    ", COUNT(" + firstRelationshipLabel + ")";
+                        Iterator it = inputArray.iterator();
+                        String firstElement, secondElement, thirdElement = "";
+                        while (it.hasNext()) {
+                            firstElement = it.next().toString();
+
+                            if (firstElement.toLowerCase().equals(nodeLabel.toLowerCase())) {
+                                //System.out.println("FIRST: " + firstElement);
+
+                                if (it.hasNext()) {
+                                    secondElement = it.next().toString();
+                                   // System.out.println("SECOND: " + secondElement);
+                                    if (!secondElement.toLowerCase().equals(relType.toLowerCase())) {
+                                        System.err.println("VIOLATION!");
+                                        isRuleViolated = true;
+                                        violatedConstraint = constraint;
+                                        message = Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                    } else {
+                                        if (it.hasNext()) {
+                                            thirdElement = it.next().toString();
+                                           // System.out.println("THIRD: " + thirdElement);
+
+                                            if (!thirdElement.toLowerCase().equals(subgraphNode.toLowerCase())) {
+                                                System.err.println("VIOLATION!");
+                                                isRuleViolated = true;
+                                                violatedConstraint = constraint;
+                                                message = Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        //System.out.println("Count query: " + countQuery);
-                        Result countResult = db.execute(countQuery);
 
-                        long numRels = 0;
-                        if(!countResult.hasNext()){
-                            dbQueryCard += " MERGE " + pathQuery;
-                            System.out.println("[CREATE] DB query: " + dbQueryCard);
-                            db.execute(dbQueryCard);
-                            System.out.println("[CREATE] Created relationship!");
+                        if(inputPattern.equals(constraintPattern)){
+                            /**
+                             * Retrieve first node, last node and first relationships labels to retrieve number of relationships
+                             **/
+                            String firstNodeLabel = matches.get(0).split(":")[0];
+                            String firstRelationshipLabel = matches.get(1).split(":")[0];
+                            String lastNodeLabel = matches.get(matches.size()-1).split(":")[0];
 
-                        }
-                        while (countResult.hasNext()) {
-                            numRels = (long) countResult.next().get("COUNT(" + firstRelationshipLabel + ")");
+                            String countQuery = "";
+                            if(constraint.k.intValue() == 1){//condition only first node
+                                countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
+                                        "=" + valuesList.get(0) + " RETURN " + firstNodeLabel + ", COUNT(" +
+                                        firstRelationshipLabel + ")";
+                            } else {
+                                countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
+                                        "=" + valuesList.get(0) + " AND " + lastNodeLabel + "." + keysList.get(1) + "=" +
+                                        valuesList.get(1) + " RETURN " + firstNodeLabel + ", " + lastNodeLabel +
+                                        ", COUNT(" + firstRelationshipLabel + ")";
+                            }
+                            System.out.println("Count query: " + countQuery);
+                            Result countResult = db.execute(countQuery);
 
-                            System.out.println("[CREATE] Numrels: " + numRels);
-                            if (numRels < c.maxKCard.intValue()) {
-                                dbQueryCard += "MERGE " + pathQuery;
-                                System.out.println("[CREATE] DB query: " + dbQueryCard);
-                                db.execute(dbQueryCard);
-                                System.out.println("[CREATE] Created relationship!");
+                            long numRels = 0;
+                            if(countResult.hasNext()) {
+                                while (countResult.hasNext()) {
+                                    numRels = (long) countResult.next().get("COUNT(" + firstRelationshipLabel + ")");
+
+                                    System.out.println("[CREATE] Numrels: " + numRels);
+                                    if (numRels >= constraint.maxKCard.intValue()) {
+                                        isRuleViolated = true;
+                                        violatedConstraint = constraint;
+                                        message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                                    }
+                                }
                             }
                         }
 
                     }
                 }
             }
-        }
 
+            if (isRuleViolated == true) {
+                message += " ( Node label: " + violatedConstraint.nodeLabel;
+                message += ", Relationship type:  " + violatedConstraint.relType;
+                message += ", Subgraph: " + violatedConstraint.subgraph;
+                message += ", Min: " + violatedConstraint.minKCard;
+                message += ", Max: " + violatedConstraint.maxKCard + ")";
+            } else {
+                dbQueryCard += " CREATE " + pathQuery;
+                System.out.println("[CREATE] DB query: " + dbQueryCard);
+                db.execute(dbQueryCard);
+                message += Output.MESSAGE_TYPE.SUCCESS.text;
+            }
+        }
+        return Stream.of(new Output(message));
     }
 
     /////////////////////////////////////////////////////////////////////////////

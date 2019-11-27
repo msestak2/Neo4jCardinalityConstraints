@@ -2,15 +2,9 @@ package card_constraint;
 
 import com.google.gson.Gson;
 import org.neo4j.graphdb.GraphDatabaseService;
-import org.neo4j.graphdb.Node;
-import org.neo4j.graphdb.Result;
-import org.neo4j.kernel.api.proc.Neo4jTypes;
 import org.neo4j.procedure.*;
-import org.omg.PortableInterceptor.SYSTEM_EXCEPTION;
 
-import javax.smartcardio.Card;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
