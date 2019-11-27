@@ -3,3 +3,5 @@ modules.xml
 *.iml
 workspace.xml
 profiles_settings.xml
+*.iws
+tasks.xml
