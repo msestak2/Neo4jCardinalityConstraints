@@ -2,6 +2,8 @@ package card_constraint;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.TreeMap;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -12,11 +14,13 @@ public class PatternMatcher {
     private List<String> matches;
     private List<String> inputArray;
     private List<String> nodeTypes;
+    public Map inputPatternMap;
 
     public PatternMatcher() {
         this.matches = new ArrayList<>();
         this.inputArray = new ArrayList<>();
         this.nodeTypes = new ArrayList<>();
+        this.inputPatternMap = new TreeMap();
     }
 
     public void parseNodesRelationships(String inputPath){
@@ -66,6 +70,18 @@ public class PatternMatcher {
 
     }
 
+    public void buildMapFromInputPattern(){
+        Pattern varPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
+        Matcher varMatcher = varPattern.matcher(this.inputPattern);
+
+        while(varMatcher.find()){
+            if (varMatcher.group(1) != null)
+                inputPatternMap.put(varMatcher.group(1).split(":")[0], varMatcher.group(1).split(":")[1]);
+            else if(varMatcher.group(2) != null)
+                inputPatternMap.put(varMatcher.group(2).split(":")[0], varMatcher.group(2).split(":")[1]);
+        }
+    }
+
     public String getPathQuery() {
         return pathQuery;
     }
@@ -88,5 +104,9 @@ public class PatternMatcher {
 
     public List<String> getNodeTypes() {
         return nodeTypes;
+    }
+
+    public Map getInputPatternMap() {
+        return inputPatternMap;
     }
 }

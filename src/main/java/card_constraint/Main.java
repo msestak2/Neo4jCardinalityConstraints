@@ -248,7 +248,6 @@ public class Main {
 
         int numNodes = 0;
 
-        String firstNode = matches.get(0);
         String dbQueryNoCard = "MATCH ", dbQueryCard = "MATCH ";
 
         for(int i = 0; i<matches.size(); i++){
@@ -297,33 +296,26 @@ public class Main {
             List<String> conditionsList = new ArrayList<>();
 
             while(conditionsMatcher.find()){
-                conditionsList.add(conditionsMatcher.group(1));
+                 matcher.inputPatternMap.put(conditionsMatcher.group(1).split(":")[0], conditionsMatcher.group(1).split(":")[1].replaceAll("'", ""));
             }
-            String firstNodeCondition = conditionsList.get(0);
-            String lastNodeCondition = conditionsList.get(conditionsList.size()-1);
-
-            List<String> keysList = new ArrayList<>();
-            List<String> valuesList = new ArrayList<>();
-
-            keysList.add(firstNodeCondition.split(":")[0]);
-            keysList.add(lastNodeCondition.split(":")[0]);
-            valuesList.add(firstNodeCondition.split(":|,")[1]);
-            valuesList.add(lastNodeCondition.split(":|,")[1]);
 
             matcher.removeConditionsFromPattern();
-            inputPattern = matcher.getInputPattern();
+            matcher.buildMapFromInputPattern();
+
+       //     inputPattern = matcher.getInputPattern();
             List<String> nodeTypes = matcher.getNodeTypes();
             List<String> inputArray = matcher.getInputArray();
 
-            for(String nodeType : nodeTypes){
-                List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
+            Iterator itr = matcher.inputPatternMap.entrySet().iterator();
+            while (itr.hasNext()){
+                Map.Entry entry = (Map.Entry)itr.next();
+            }
 
-                for(LocalCardinalityConstraint constraint: constraints) {
+            List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
-                    String constraintPattern= "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
-                    constraintPattern = buildSubgraphPattern(2, constraintPattern, constraint.subgraph);
+            for(String nodeType : nodeTypes) {
 
-                    System.out.println("Constraint pattern: " + constraintPattern);
+                for (LocalCardinalityConstraint constraint : constraints) {
 
                     if (constraint.k.intValue() == (numNodes - 1)) {
                         String nodeLabel = constraint.nodeLabel;
@@ -342,7 +334,7 @@ public class Main {
 
                                 if (it.hasNext()) {
                                     secondElement = it.next().toString();
-                                   // System.out.println("SECOND: " + secondElement);
+                                    // System.out.println("SECOND: " + secondElement);
                                     if (!secondElement.toLowerCase().equals(relType.toLowerCase())) {
                                         System.err.println("VIOLATION!");
                                         isRuleViolated = true;
@@ -351,7 +343,7 @@ public class Main {
                                     } else {
                                         if (it.hasNext()) {
                                             thirdElement = it.next().toString();
-                                           // System.out.println("THIRD: " + thirdElement);
+                                            // System.out.println("THIRD: " + thirdElement);
 
                                             if (!thirdElement.toLowerCase().equals(subgraphNode.toLowerCase())) {
                                                 System.err.println("VIOLATION!");
@@ -364,44 +356,53 @@ public class Main {
                                 }
                             }
                         }
+                    }
+                }
+            }
 
-                        if(inputPattern.equals(constraintPattern)){
-                            /**
-                             * Retrieve first node, last node and first relationships labels to retrieve number of relationships
-                             **/
-                            String firstNodeLabel = matches.get(0).split(":")[0];
-                            String firstRelationshipLabel = matches.get(1).split(":")[0];
-                            String lastNodeLabel = matches.get(matches.size()-1).split(":")[0];
+            for (LocalCardinalityConstraint constraint : constraints) {
 
-                            String countQuery = "";
-                            if(constraint.k.intValue() == 1){//condition only first node
-                                countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                                        "=" + valuesList.get(0) + " RETURN " + firstNodeLabel + ", COUNT(" +
-                                        firstRelationshipLabel + ")";
-                            } else {
-                                countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                                        "=" + valuesList.get(0) + " AND " + lastNodeLabel + "." + keysList.get(1) + "=" +
-                                        valuesList.get(1) + " RETURN " + firstNodeLabel + ", " + lastNodeLabel +
-                                        ", COUNT(" + firstRelationshipLabel + ")";
-                            }
-                            System.out.println("Count query: " + countQuery);
-                            Result countResult = db.execute(countQuery);
+                if (constraint.k.intValue() == (numNodes - 1)) {
+                    Map constraintMap = new HashMap();
+                    constraintMap.put("E", constraint.nodeLabel);
+                    constraintMap.put("R", constraint.relType);
+                    constraintMap.put("S", constraint.subgraph);
 
-                            long numRels = 0;
-                            if(countResult.hasNext()) {
-                                while (countResult.hasNext()) {
-                                    numRels = (long) countResult.next().get("COUNT(" + firstRelationshipLabel + ")");
+                    Structure structure = new Structure();
+                    Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
+                    structure.structureMap.putAll(recurConstraintMap);
 
-                                    System.out.println("[CREATE] Numrels: " + numRels);
-                                    if (numRels >= constraint.maxKCard.intValue()) {
-                                        isRuleViolated = true;
-                                        violatedConstraint = constraint;
-                                        message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                                    }
+                    //build structure map for input pattern query
+                    Iterator structureIt = structure.structureMap.entrySet().iterator();
+
+                    //check if constraint map is subset of input map
+                    boolean isEqualMaps = true;
+                    while (structureIt.hasNext()) {
+                        Map.Entry entry = (Map.Entry) structureIt.next();
+                        if(!matcher.inputPatternMap.entrySet().contains(entry))
+                            isEqualMaps = false;
+                    }
+
+                    if (isEqualMaps) {
+
+                        String countQuery = buildDBCountQuery(inputPattern);
+
+                        System.out.println("Count query: " + countQuery);
+                        Result countResult = db.execute(countQuery);
+
+                        long numRels = 0;
+                        if (countResult.hasNext()) {
+                            while (countResult.hasNext()) {
+                                numRels = (long) countResult.next().get("number");
+
+                                System.out.println("[CREATE] Numrels: " + numRels);
+                                if (numRels >= constraint.maxKCard.intValue()) {
+                                    isRuleViolated = true;
+                                    violatedConstraint = constraint;
+                                    message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
                                 }
                             }
                         }
-
                     }
                 }
             }
@@ -411,7 +412,11 @@ public class Main {
                 message += ", Relationship type:  " + violatedConstraint.relType;
                 message += ", Subgraph: " + violatedConstraint.subgraph;
                 message += ", Min: " + violatedConstraint.minKCard;
-                message += ", Max: " + violatedConstraint.maxKCard + ")";
+                message += ", Max: " + violatedConstraint.maxKCard;
+
+                if(violatedConstraint.params != null)
+                    message += ", Params: " + violatedConstraint.params;
+                message += ")";
             } else {
                 dbQueryCard += " CREATE " + pathQuery;
                 System.out.println("[CREATE] DB query: " + dbQueryCard);
@@ -590,7 +595,7 @@ public class Main {
     }
 
     ////////////////////////////////////////////////////////////////////////////
-    @Procedure(value = "card_constraint.create_relationship_props", mode = Mode.WRITE)
+   /* @Procedure(value = "card_constraint.create_relationship_props", mode = Mode.WRITE)
     @Description("create new relationship with property and cardinality check")
     public Stream<Output> createRelationshipProps(@Name("query") String query, @Name("constraint_mode") String mode){
         String message = "";
@@ -601,9 +606,9 @@ public class Main {
 
         List<String> inputArray = new ArrayList<>();
 
-        /**
+        *//**
          * Parse input string and get nodes and relationships
-         */
+         *//*
         Pattern nodesPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
         Matcher nodesMatcher = nodesPattern.matcher(query);
         List<String> matches = new ArrayList<>();
@@ -753,7 +758,7 @@ public class Main {
             }
         }
         return Stream.of(new Output(message));
-    }
+    }*/
 
     ////////////////////////////////////////////////////////////////////
     private List<String[]> readCSVFile(String path) {
@@ -949,7 +954,7 @@ public class Main {
 
             switch(property.getKey().toString()){
                 case "E":
-                    structureMap.put("n" + recursionLevel, property.getValue());
+                    structureMap.put("n" + recursionLevel, property.getValue().toString());
 
                     if(params != null){
                         while(it.hasNext()){
@@ -973,10 +978,9 @@ public class Main {
                         }
                     }
 
-                   // System.err.println("Structure Map " +  recursionLevel + ": " + structureMap.values());
                     break;
                 case "R":
-                    structureMap.put("r"+ recursionLevel, property.getValue());
+                    structureMap.put("r"+ recursionLevel, property.getValue().toString());
 
                     if(params != null){
                         while(it.hasNext()){
@@ -1014,22 +1018,18 @@ public class Main {
         return structureMap;
     }
 
-    private String buildDBCountQuery(int k, String inputQuery, String inputPattern, List<String> matches){
-        Pattern conditionsPattern = Pattern.compile("\\{(.*?)\\}");
-        Matcher conditionsMatcher = conditionsPattern.matcher(inputQuery);
+    private String buildDBCountQuery(String inputPattern){
+        String strippedInput = inputPattern.replaceAll("\\{.*?\\}", "");
 
-        List<String> conditionsList = new ArrayList<>();
+        System.out.println("new input pattern: " + strippedInput);
+        Pattern relLabelPattern = Pattern.compile("\\[(.*?)\\]");
+        Matcher relLabelMatcher = relLabelPattern.matcher(strippedInput);
+        List<String> matches = new ArrayList<>();
 
-        while(conditionsMatcher.find()){
-            conditionsList.add(conditionsMatcher.group(1));
+        while(relLabelMatcher.find()){
+            matches.add(relLabelMatcher.group(1).split(":")[0]);
         }
-        String firstNodeCondition = conditionsList.get(0);
-        String lastNodeCondition = conditionsList.get(conditionsList.size()-1);
-        //  System.out.println("Conditions: " + firstNodeCondition + " - " + lastNodeCondition);
-
-        List<String> keysList = new ArrayList<>();
-        List<String> valuesList = new ArrayList<>();
-
+        /*
         keysList.add(firstNodeCondition.split(":")[0]);
         keysList.add(lastNodeCondition.split(":")[0]);
         valuesList.add(firstNodeCondition.split(":|,")[1]);
@@ -1038,17 +1038,12 @@ public class Main {
         String firstNodeLabel = matches.get(0).split(":")[0];
         String firstRelationshipLabel = matches.get(1).split(":")[0];
         String lastNodeLabel = matches.get(matches.size()-1).split(":")[0];
+*/
+        String relationshipLabel = matches.get(0);
+        System.out.println("rel label: " + relationshipLabel);
 
-        String countQuery = "";
-        if(k == 1) {//condition only first node
-            countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                    "=" + valuesList.get(0) + " RETURN " + firstNodeLabel + ", COUNT(" + firstRelationshipLabel + ") AS number";
-        } else {
-            countQuery = "MATCH " + inputPattern + " WHERE " + firstNodeLabel + "." + keysList.get(0) +
-                    "=" + valuesList.get(0) + " AND " + lastNodeLabel + "." + keysList.get(1) + "=" +
-                    valuesList.get(1) + " RETURN " + firstNodeLabel + ", " + lastNodeLabel +
-                    ", COUNT(" + firstRelationshipLabel + ") AS number";
-        }
+        String countQuery = "MATCH " + inputPattern + " RETURN COUNT(" + relationshipLabel + ") as number";
+
         return countQuery;
     }
 
@@ -1076,7 +1071,7 @@ public class Main {
 
             Map params = null;
             if(n.hasProperty("params"))
-                params = gson.fromJson(n.getProperty("params").toString(), map.getClass());
+               params = gson.fromJson(n.getProperty("params").toString(), map.getClass());
             LocalCardinalityConstraint constraint = new LocalCardinalityConstraint(id, relType, nodeLabel, map, min, max, k, params);
 
             constraints.add(constraint);
