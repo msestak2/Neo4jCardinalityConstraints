@@ -802,8 +802,9 @@ public class Main {
                     if(params != null){
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
 
-                            if(Integer.valueOf(paramEntry.getKey().toString()) == recursionLevel){
+                            if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
 
                                 localIt = localParams.entrySet().iterator();
@@ -829,7 +830,8 @@ public class Main {
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
 
-                            if(Integer.valueOf(paramEntry.getKey().toString()) == recursionLevel){
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+                            if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
 
                                 localIt = localParams.entrySet().iterator();

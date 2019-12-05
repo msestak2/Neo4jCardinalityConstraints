@@ -75,7 +75,9 @@ public class CardinalityConstraint {
         String jsonSubgraph = gson.toJson(objectMap.get("S"));
         String jsonParams = gson.toJson(objectMap.get("params"));
 
-        String query = "CREATE (c:Card_Constraint {R: \'"+objectMap.get("R") + "\', E: \'" + objectMap.get("E") +
+        System.out.println("Params: " + jsonParams);
+
+        String query = "CREATE (c:CardinalityConstraint {R: \'" + objectMap.get("R") + "\', E: \'" + objectMap.get("E") +
                 "\', S: \'" + jsonSubgraph + "\', min : " + objectMap.get("min") + ", max: \'" + objectMap.get("max") +
                 "\', k: " + k + ", params: \'" + jsonParams + "\'}) RETURN c";
         System.out.println("Query: " + query);
