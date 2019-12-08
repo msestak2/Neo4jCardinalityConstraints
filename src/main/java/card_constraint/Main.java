@@ -309,8 +309,76 @@ public class Main {
 
             List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
-            boolean relExists = true;
-            for(String nodeType : nodeTypes) {
+            boolean relExistsDB, relExistsPattern = true;
+
+            int numRels = 0;
+            for (LocalCardinalityConstraint constraint:
+                 constraints) {
+                // check for min
+                System.out.println("******* CONSTRAINT******* (nodeType: " + constraint.nodeLabel + ", relType: " + constraint.relType +
+                        ", subgraph: " + constraint.subgraph);
+                if(constraint.minKCard.intValue() == 1){
+                    for (String inputNode:
+                         nodeTypes) {
+                        String nodeType = inputNode.split(":")[1].substring(0, inputNode.split(":")[1].indexOf("{"));
+
+                        if(nodeType.trim().toLowerCase().equals(constraint.nodeLabel.toLowerCase())){
+                            String constraintPattern = "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
+
+                            constraintPattern = buildConstraintPattern(2, constraintPattern, constraint.subgraph, constraint.params);
+
+                            relExistsDB = checkRelationshipExistence(inputNode, constraintPattern);
+                            System.out.println("EXISTS in DB: " + relExistsDB);
+
+                            if(relExistsDB == false){
+                                relExistsPattern = checkRelationshipInputPattern(matcher, constraint);
+                                System.out.println("EXISTS in input pattern: " + relExistsPattern);
+
+                                if(relExistsPattern == false){
+                                    isRuleViolated = true;
+                                    violatedConstraints.add(constraint);
+                                    message = Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                }
+                                else{
+                                    // check for max
+                                    if(!constraint.maxKCard.equals("*")){
+                                        numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
+                                        if (numRels >= Integer.parseInt(constraint.maxKCard)) {
+                                            isRuleViolated = true;
+                                            violatedConstraints.add(constraint);
+                                            message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                                        }
+                                    }
+                                }
+                            }
+                            else{
+                                // check for max
+                                if(!constraint.maxKCard.equals("*")){
+                                    numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
+                                    if (numRels >= Integer.parseInt(constraint.maxKCard)) {
+                                        isRuleViolated = true;
+                                        violatedConstraints.add(constraint);
+                                        message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else{
+                    // check for max
+                    if(!constraint.maxKCard.equals("*")){
+                        numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
+                        if (numRels >= Integer.parseInt(constraint.maxKCard)) {
+                            isRuleViolated = true;
+                            violatedConstraints.add(constraint);
+                            message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                        }
+                    }
+                }
+            }
+
+            /*for(String nodeType : nodeTypes) {
 
                 for (LocalCardinalityConstraint constraint : constraints) {
 
@@ -329,7 +397,7 @@ public class Main {
                             String startNode = firstElement;
                             firstElement = firstElement.toLowerCase().split(":")[1].trim();
                             if (firstElement.indexOf("{") != -1)
-                                firstElement = firstElement.substring(0, firstElement.indexOf("{")).trim();
+                                firstElement = firstElement.substring(0, firstElement.indexOf("{")).trim();*/
 
                             /*if (firstElement.toLowerCase().equals(nodeLabel.toLowerCase())) {
                                 if (it.hasNext()) {
@@ -354,7 +422,7 @@ public class Main {
                                         }
                                     }
                                 }
-                            }*/
+                            }
                         }
                     }
                 }
@@ -365,52 +433,14 @@ public class Main {
 
                 if (constraint.k.intValue() == (numNodes - 1)) {
                     if (!constraint.maxKCard.equals("*")) {
-                        Map constraintMap = new HashMap();
-                        constraintMap.put("E", constraint.nodeLabel);
-                        constraintMap.put("R", constraint.relType);
-                        constraintMap.put("S", constraint.subgraph);
-
-                        Structure structure = new Structure();
-                        Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
-                        structure.structureMap.putAll(recurConstraintMap);
-
-                        //build structure map for constraint pattern query
-                        Iterator structureIt = structure.structureMap.entrySet().iterator();
-
-                        //check if constraint map is subset of input map
-                        boolean isEqualMaps = true;
-                        while (structureIt.hasNext()) {
-                            Map.Entry entry = (Map.Entry) structureIt.next();
-                            //  System.out.println("Constraint map entry: " + entry.getKey() + " - " + entry.getValue());
-                            if (!matcher.inputPatternMap.entrySet().contains(entry))
-                                isEqualMaps = false;
-                        }
-
                         if (isEqualMaps) {
 
-                            String countQuery = buildDBCountQuery(inputPattern);
 
-                            System.out.println("Count query: " + countQuery);
-                            Result countResult = db.execute(countQuery);
-
-                            long numRels = 0;
-                            if (countResult.hasNext()) {
-                                while (countResult.hasNext()) {
-                                    numRels = (long) countResult.next().get("number");
-
-                                    System.out.println("[CREATE] Numrels: " + numRels);
-                                    if (numRels >= Integer.parseInt(constraint.maxKCard)) {
-                                        isRuleViolated = true;
-                                        violatedConstraints.add(constraint);
-                                        message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                                    }
-                                }
-                            }
-                        }
+        }
                     }
                 }
             }
-
+*/
             if (isRuleViolated == true) {
                 for (LocalCardinalityConstraint violatedConstraint :
                         violatedConstraints) {
@@ -427,7 +457,7 @@ public class Main {
 
             } else {
                 dbQueryCard += " CREATE " + pathQuery;
-                //  System.out.println("[CREATE] DB query: " + dbQueryCard);
+                System.out.println("[CREATE] DB query: " + dbQueryCard);
                 // db.execute(dbQueryCard);
                 message += Output.MESSAGE_TYPE.SUCCESS.text;
             }
@@ -664,33 +694,6 @@ public class Main {
 
     }
 
-    private String buildSubgraphPattern(int recursionLevel, String constraintPattern, Map<String, Object> subgraphMap){
-        TreeMap sortedMap = new TreeMap();
-        sortedMap.putAll(subgraphMap);
-
-        for(Object entry : sortedMap.entrySet()){
-            Map.Entry property = (Map.Entry)entry;
-            switch(property.getKey().toString()){
-                case "E":
-                    constraintPattern += "(n" + recursionLevel + ":" + property.getValue() + ")";
-
-                    break;
-                case "R":
-                    constraintPattern += "-[r" + recursionLevel + ":" + property.getValue() + "]->";
-
-                    break;
-                case "S":
-                    Map sMap = (Map) property.getValue();
-
-                    constraintPattern = buildSubgraphPattern((recursionLevel+1), constraintPattern, sMap);
-                    break;
-                default:
-                    return constraintPattern;
-            }
-        }
-        return constraintPattern;
-    }
-
     private String buildConstraintPattern(int recursionLevel, String constraintPattern, Map<String, Object> subgraphMap,
                                           Map<String, Object> params){
         TreeMap sortedMap = new TreeMap();
@@ -713,7 +716,9 @@ public class Main {
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
 
-                            if (Integer.valueOf(paramEntry.getKey().toString()) == recursionLevel) {
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+
+                            if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
 
                                 localIt = localParams.entrySet().iterator();
@@ -743,8 +748,9 @@ public class Main {
                         while(it.hasNext()){
 
                             Map.Entry paramEntry = (Map.Entry) it.next();
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
 
-                            if (Integer.valueOf(paramEntry.getKey().toString()) == recursionLevel) {
+                            if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
 
                                 localIt = localParams.entrySet().iterator();
@@ -883,15 +889,66 @@ public class Main {
         return countQuery;
     }
 
-    public boolean checkRelationshipExistence(String startNode, String endNode, String relType) {
+    public int getCurrentNumberOfRels(PatternMatcher matcher, String inputPattern, LocalCardinalityConstraint constraint) {
+        long numRels = 0;
+
+        TreeMap constraintMap = new TreeMap();
+        constraintMap.put("E", constraint.nodeLabel);
+        constraintMap.put("R", constraint.relType);
+        constraintMap.put("S", constraint.subgraph);
+
+        Structure structure = new Structure();
+        Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
+        structure.structureMap.putAll(recurConstraintMap);
+
+        if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
+
+            String countQuery = buildDBCountQuery(inputPattern);
+
+            System.out.println("Count query: " + countQuery);
+            Result countResult = db.execute(countQuery);
+
+            if (countResult.hasNext()) {
+                while (countResult.hasNext()) {
+                    numRels = (long) countResult.next().get("number");
+
+                    System.out.println("[CREATE] Numrels: " + numRels);
+                }
+            }
+        }
+        return (int)numRels;
+    }
+
+    public boolean checkRelationshipExistence(String startNode, String pattern) {
         boolean existsRel = false;
 
-        String dbQuery = "MATCH p=(" + startNode + ")-[" + relType + "]-(" + endNode + ") RETURN p";
-        System.out.println("[CHECK EXISTENCE] DB query: " + dbQuery);
+        pattern = pattern.substring(pattern.indexOf("-"),pattern.length());
+        String dbQuery = "MATCH p=(" + startNode + ")" + pattern + " RETURN p";
         Result dbResults = db.execute(dbQuery);
 
         if (dbResults.hasNext())
             existsRel = true;
+        return existsRel;
+    }
+
+    public boolean checkRelationshipInputPattern(PatternMatcher matcher, LocalCardinalityConstraint constraint){
+        boolean existsRel = false;
+
+        TreeMap constraintMap = new TreeMap();
+        constraintMap.put("E", constraint.nodeLabel);
+        constraintMap.put("R", constraint.relType);
+        constraintMap.put("S", constraint.subgraph);
+
+        Structure structure = new Structure();
+        Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
+        structure.structureMap.putAll(recurConstraintMap);
+
+        //build structure map for constraint pattern query
+
+        if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
+            existsRel = true;
+        }
+
         return existsRel;
     }
 
@@ -902,9 +959,9 @@ public class Main {
 
         Result resultConstraints = null;
         if (condition != null)
-            resultConstraints = db.execute("MATCH (c:Card_Constraint) WHERE c.E = '" + condition + "' RETURN c");
+            resultConstraints = db.execute("MATCH (c:CardinalityConstraint) WHERE c.E = '" + condition + "' RETURN c");
         else
-            resultConstraints = db.execute("MATCH (c:Card_Constraint) RETURN c");
+            resultConstraints = db.execute("MATCH (c:CardinalityConstraint) RETURN c");
 
         while (resultConstraints.hasNext()) {
             Map<String, Object> row = resultConstraints.next();
@@ -923,7 +980,6 @@ public class Main {
             LocalCardinalityConstraint constraint = new LocalCardinalityConstraint(id, relType, nodeLabel, map, min, max, k, params);
 
             constraints.add(constraint);
-
         }
         return constraints;
     }

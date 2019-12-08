@@ -1,5 +1,7 @@
 package card_constraint;
 
+import scala.util.matching.Regex;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -33,6 +35,7 @@ public class PatternMatcher {
             if (nodesMatcher.group(1) != null){
                 this.matches.add(nodesMatcher.group(1));
                 this.pathQuery += "(" + nodesMatcher.group(1).split(":")[0] + ")-";
+                this.nodeTypes.add(nodesMatcher.group(1));
             } else if(nodesMatcher.group(2) != null) {
                 this.matches.add(nodesMatcher.group(2));
                 this.pathQuery += "[" + nodesMatcher.group(2) + "]->";
@@ -55,13 +58,11 @@ public class PatternMatcher {
         while(varMatcher.find()){
             if (varMatcher.group(1) != null) {
                 variableMatches.add(varMatcher.group(1).split(":")[0]);
-                this.nodeTypes.add(varMatcher.group(1).split(":")[1]);
                 this.inputArray.add(varMatcher.group(1).split(":")[1]);
             }
             else if(varMatcher.group(2) != null) {
                 variableMatches.add(varMatcher.group(2).split(":")[1]);
                 this.inputArray.add(varMatcher.group(2).split(":")[1]);;
-
             }
         }
 
