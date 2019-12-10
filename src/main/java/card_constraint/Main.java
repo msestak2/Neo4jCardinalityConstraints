@@ -243,7 +243,7 @@ public class Main {
          */
         matcher.parseNodesRelationships(query);
 
-        String pathQuery = matcher.getPathQuery();
+
         String inputPattern = "";
         List<String> matches = matcher.getMatches();
 
@@ -275,6 +275,9 @@ public class Main {
         if(mode.toLowerCase().equals("no_cardinality")){
             System.out.println("[CREATE NO CARDINALITY]");
 
+            matcher.removeConditionsFromPattern();
+            String pathQuery = matcher.getPatternVariables();
+
             dbQueryNoCard += " CREATE " + pathQuery;
             System.out.println("[CREATE] DB query: " + dbQueryNoCard);
             db.execute(dbQueryNoCard);
@@ -285,7 +288,6 @@ public class Main {
              */
             System.out.println("[CREATE CARDINALITY]");
 
-            List<LocalCardinalityConstraint> violatedConstraints = new ArrayList<>();
             boolean isRuleViolated = false;
 
             /**
@@ -294,18 +296,21 @@ public class Main {
             Pattern conditionsPattern = Pattern.compile("\\{(.*?)\\}");
             Matcher conditionsMatcher = conditionsPattern.matcher(query);
 
-            List<String> conditionsList = new ArrayList<>();
-
             while(conditionsMatcher.find()){
-                 matcher.inputPatternMap.put(conditionsMatcher.group(1).split(":")[0], conditionsMatcher.group(1).split(":")[1].replaceAll("'", ""));
+                if (conditionsMatcher.group(1).contains(",")) {
+                    String[] singleConditions = conditionsMatcher.group(1).split(",");
+                    for (int i = 0; i < singleConditions.length; i++)
+                        matcher.inputPatternMap.put(singleConditions[i].split(":")[0].trim(), singleConditions[i].split(":")[1].replaceAll("'", "").trim());
+                } else
+                    matcher.inputPatternMap.put(conditionsMatcher.group(1).split(":")[0].trim(), conditionsMatcher.group(1).split(":")[1].replaceAll("'", "").trim());
             }
 
             matcher.removeConditionsFromPattern();
             matcher.buildMapFromInputPattern();
+            
 
             //     inputPattern = matcher.getInputPattern();
             List<String> nodeTypes = matcher.getNodeTypes();
-            List<String> inputPatternElements = matcher.getInputArray();
 
             List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
@@ -315,17 +320,26 @@ public class Main {
             for (LocalCardinalityConstraint constraint:
                  constraints) {
                 // check for min
-                System.out.println("******* CONSTRAINT******* (nodeType: " + constraint.nodeLabel + ", relType: " + constraint.relType +
-                        ", subgraph: " + constraint.subgraph);
+
+                TreeMap constraintMap = new TreeMap();
+                constraintMap.put("E", constraint.nodeLabel);
+                constraintMap.put("R", constraint.relType);
+                constraintMap.put("S", constraint.subgraph);
+
+                Structure structure = new Structure();
+                Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
+                structure.structureMap.putAll(recurConstraintMap);
+
+                String constraintPattern = "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
+
+                constraintPattern = buildConstraintPattern(2, constraintPattern, constraint.subgraph, constraint.params);
+
                 if(constraint.minKCard.intValue() == 1){
                     for (String inputNode:
                          nodeTypes) {
                         String nodeType = inputNode.split(":")[1].substring(0, inputNode.split(":")[1].indexOf("{"));
 
                         if(nodeType.trim().toLowerCase().equals(constraint.nodeLabel.toLowerCase())){
-                            String constraintPattern = "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
-
-                            constraintPattern = buildConstraintPattern(2, constraintPattern, constraint.subgraph, constraint.params);
 
                             relExistsDB = checkRelationshipExistence(inputNode, constraintPattern);
                             System.out.println("EXISTS in DB: " + relExistsDB);
@@ -336,127 +350,100 @@ public class Main {
 
                                 if(relExistsPattern == false){
                                     isRuleViolated = true;
-                                    violatedConstraints.add(constraint);
-                                    message = Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                    message += Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                    message += " ( Node label: " + constraint.nodeLabel;
+                                    message += ", Relationship type:  " + constraint.relType;
+                                    message += ", Subgraph: " + constraint.subgraph;
+                                    message += ", Min: " + constraint.minKCard;
+                                    message += ", Max: " + constraint.maxKCard;
+
+                                    if (constraint.params != null)
+                                        message += ", Params: " + constraint.params;
+                                    message += ")";
                                 }
-                                else{
+                                /*else{
                                     // check for max
                                     if(!constraint.maxKCard.equals("*")){
-                                        numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
-                                        if (numRels >= Integer.parseInt(constraint.maxKCard)) {
-                                            isRuleViolated = true;
-                                            violatedConstraints.add(constraint);
-                                            message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                                        }
-                                    }
-                                }
-                            }
-                            else{
-                                // check for max
-                                if(!constraint.maxKCard.equals("*")){
-                                    numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
-                                    if (numRels >= Integer.parseInt(constraint.maxKCard)) {
-                                        isRuleViolated = true;
-                                        violatedConstraints.add(constraint);
-                                        message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                else{
-                    // check for max
-                    if(!constraint.maxKCard.equals("*")){
-                        numRels = getCurrentNumberOfRels(matcher, inputPattern, constraint);
-                        if (numRels >= Integer.parseInt(constraint.maxKCard)) {
-                            isRuleViolated = true;
-                            violatedConstraints.add(constraint);
-                            message = Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                        }
-                    }
-                }
-            }
+                                        if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
+                                            numRels = getCurrentNumberOfRels(inputPattern);
 
-            /*for(String nodeType : nodeTypes) {
-
-                for (LocalCardinalityConstraint constraint : constraints) {
-
-                    if (constraint.k.intValue() == (numNodes - 1)) {
-                        String nodeLabel = constraint.nodeLabel;
-                        String relType = constraint.relType;
-                        Map subgraph = constraint.subgraph;
-
-                        String subgraphNode = subgraph.get("E").toString();
-
-                        Iterator it = matches.iterator();
-                        String firstElement, secondElement, thirdElement = "";
-                        while (it.hasNext()) {
-                            firstElement = it.next().toString();
-
-                            String startNode = firstElement;
-                            firstElement = firstElement.toLowerCase().split(":")[1].trim();
-                            if (firstElement.indexOf("{") != -1)
-                                firstElement = firstElement.substring(0, firstElement.indexOf("{")).trim();*/
-
-                            /*if (firstElement.toLowerCase().equals(nodeLabel.toLowerCase())) {
-                                if (it.hasNext()) {
-                                    secondElement = it.next().toString();
-
-                                    String type = secondElement;
-                                    secondElement = secondElement.toLowerCase().split(":")[1].trim();
-                                    if(secondElement.indexOf("{") != -1)
-                                        secondElement = secondElement.substring(0, secondElement.indexOf("{")).trim();
-
-                                    if (secondElement.toLowerCase().equals(relType.toLowerCase())) {
-                                           if (it.hasNext()) {
-                                            thirdElement = it.next().toString();
-                                            // System.out.println("THIRD: " + thirdElement);
-
-                                            if (!thirdElement.toLowerCase().equals(subgraphNode.toLowerCase())) {
-                                                System.err.println("VIOLATION!");
+                                            if (numRels >= Integer.parseInt(constraint.maxKCard)) {
                                                 isRuleViolated = true;
                                                 violatedConstraints.add(constraint);
-                                                message = Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                                                message += Output.MESSAGE_TYPE.MAX_VIOLATION.text;
                                             }
                                         }
                                     }
-                                }
+                                }*/
                             }
+                            /*else{
+                                // check for max
+                                if(!constraint.maxKCard.equals("*")){
+                                    if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
+                                        numRels = getCurrentNumberOfRels(inputPattern);
+
+                                        if (numRels >= Integer.parseInt(constraint.maxKCard)) {
+                                            isRuleViolated = true;
+                                            violatedConstraints.add(constraint);
+                                            message += Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                                        }
+                                    }
+                                }
+                            }*/
                         }
                     }
                 }
-            }
 
+                    // check for max
 
-            for (LocalCardinalityConstraint constraint : constraints) {
+                if (!constraint.maxKCard.equals("*")) {
+                    System.out.println("----------------------");
+                    System.out.println("Input pattern structure: " + matcher.getPathQuery());
 
-                if (constraint.k.intValue() == (numNodes - 1)) {
-                    if (!constraint.maxKCard.equals("*")) {
-                        if (isEqualMaps) {
+                    constraintPattern = constraintPattern.replaceAll("\\{.*?\\}", "");
+                    constraintPattern = constraintPattern.replaceAll("\\,", "");
+                    constraintPattern = constraintPattern.replaceAll("\\ ", "");
+                    System.out.println("Constraint structure: " + constraintPattern);
 
+                    if (matcher.getPathQuery().equals(constraintPattern)) {
 
-        }
+                        if (matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())) {
+                            numRels = getCurrentNumberOfRels(inputPattern);
+
+                            if (numRels >= Integer.parseInt(constraint.maxKCard)) {
+                                isRuleViolated = true;
+                                message += Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                                message += " ( Node label: " + constraint.nodeLabel;
+                                message += ", Relationship type:  " + constraint.relType;
+                                message += ", Subgraph: " + constraint.subgraph;
+                                message += ", Min: " + constraint.minKCard;
+                                message += ", Max: " + constraint.maxKCard;
+
+                                if (constraint.params != null)
+                                    message += ", Params: " + constraint.params;
+                                message += ")";
+                            }
+                        } else {
+                            System.out.println("Hello");
+                            isRuleViolated = true;
+                            message += Output.MESSAGE_TYPE.CONSTRAINT_VIOLATION.text;
+                            message += " ( Node label: " + constraint.nodeLabel;
+                            message += ", Relationship type:  " + constraint.relType;
+                            message += ", Subgraph: " + constraint.subgraph;
+                            message += ", Min: " + constraint.minKCard;
+                            message += ", Max: " + constraint.maxKCard;
+
+                            if (constraint.params != null)
+                                message += ", Params: " + constraint.params;
+                            message += ")";
+                        }
                     }
                 }
+
             }
-*/
-            if (isRuleViolated == true) {
-                for (LocalCardinalityConstraint violatedConstraint :
-                        violatedConstraints) {
-                    message += " ( Node label: " + violatedConstraint.nodeLabel;
-                    message += ", Relationship type:  " + violatedConstraint.relType;
-                    message += ", Subgraph: " + violatedConstraint.subgraph;
-                    message += ", Min: " + violatedConstraint.minKCard;
-                    message += ", Max: " + violatedConstraint.maxKCard;
 
-                    if (violatedConstraint.params != null)
-                        message += ", Params: " + violatedConstraint.params;
-                    message += ")";
-                }
-
-            } else {
-                dbQueryCard += " CREATE " + pathQuery;
+            if (isRuleViolated == false) {
+                dbQueryCard += " CREATE " + matcher.getPathQuery();
                 System.out.println("[CREATE] DB query: " + dbQueryCard);
                 // db.execute(dbQueryCard);
                 message += Output.MESSAGE_TYPE.SUCCESS.text;
@@ -716,7 +703,7 @@ public class Main {
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
 
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
 
                             if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
@@ -729,9 +716,9 @@ public class Main {
                                         for (Map paramsMap:
                                                 paramsList) {
                                             if(paramsList.indexOf(paramsMap) == paramsList.size() - 1)
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":" + paramsMap.get("value") + "}";
+                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}";
                                             else
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":" + paramsMap.get("value") + ", ";
+                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}, ";
                                         }
                                     }
                                 }
@@ -748,7 +735,7 @@ public class Main {
                         while(it.hasNext()){
 
                             Map.Entry paramEntry = (Map.Entry) it.next();
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
 
                             if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
@@ -756,16 +743,15 @@ public class Main {
                                 localIt = localParams.entrySet().iterator();
                                 while(localIt.hasNext()){
                                     Map.Entry localEntry = (Map.Entry)localIt.next();
-                                    System.err.println(localEntry);
 
                                     if(localEntry.getKey().toString().equals("R")){
                                         List<Map> paramsList = (List<Map>)  localEntry.getValue();
                                         for (Map paramsMap:
                                                 paramsList) {
                                             if(paramsList.indexOf(paramsMap) == paramsList.size() - 1)
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":" + paramsMap.get("value") + "}";
+                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}";
                                             else
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":" + paramsMap.get("value") + ", ";
+                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}, ";
                                         }
                                     }
                                 }
@@ -808,7 +794,7 @@ public class Main {
                     if(params != null){
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
 
                             if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
@@ -836,7 +822,7 @@ public class Main {
                         while(it.hasNext()){
                             Map.Entry paramEntry = (Map.Entry) it.next();
 
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().charAt(1));
+                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
                             if (paramEntryLevel == recursionLevel) {
                                 Map localParams = (Map)paramEntry.getValue();
 
@@ -872,7 +858,6 @@ public class Main {
     private String buildDBCountQuery(String inputPattern){
         String strippedInput = inputPattern.replaceAll("\\{.*?\\}", "");
 
-        System.out.println("new input pattern: " + strippedInput);
         Pattern relLabelPattern = Pattern.compile("\\[(.*?)\\]");
         Matcher relLabelMatcher = relLabelPattern.matcher(strippedInput);
         List<String> matches = new ArrayList<>();
@@ -882,40 +867,28 @@ public class Main {
         }
 
         String relationshipLabel = matches.get(0);
-        System.out.println("rel label: " + relationshipLabel);
 
         String countQuery = "MATCH " + inputPattern + " RETURN COUNT(" + relationshipLabel + ") as number";
 
         return countQuery;
     }
 
-    public int getCurrentNumberOfRels(PatternMatcher matcher, String inputPattern, LocalCardinalityConstraint constraint) {
+    public int getCurrentNumberOfRels(String inputPattern) {
         long numRels = 0;
 
-        TreeMap constraintMap = new TreeMap();
-        constraintMap.put("E", constraint.nodeLabel);
-        constraintMap.put("R", constraint.relType);
-        constraintMap.put("S", constraint.subgraph);
+        String countQuery = buildDBCountQuery(inputPattern);
 
-        Structure structure = new Structure();
-        Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
-        structure.structureMap.putAll(recurConstraintMap);
+        System.out.println("Count query: " + countQuery);
+        Result countResult = db.execute(countQuery);
 
-        if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
+        if (countResult.hasNext()) {
+            while (countResult.hasNext()) {
+                numRels = (long) countResult.next().get("number");
 
-            String countQuery = buildDBCountQuery(inputPattern);
-
-            System.out.println("Count query: " + countQuery);
-            Result countResult = db.execute(countQuery);
-
-            if (countResult.hasNext()) {
-                while (countResult.hasNext()) {
-                    numRels = (long) countResult.next().get("number");
-
-                    System.out.println("[CREATE] Numrels: " + numRels);
-                }
+                System.out.println("[CREATE] Numrels: " + numRels);
             }
         }
+
         return (int)numRels;
     }
 

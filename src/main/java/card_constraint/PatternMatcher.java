@@ -1,7 +1,5 @@
 package card_constraint;
 
-import scala.util.matching.Regex;
-
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -13,6 +11,7 @@ public class PatternMatcher {
 
     private String pathQuery;
     private String inputPattern;
+    private String patternVariables;
     private List<String> matches;
     private List<String> inputArray;
     private List<String> nodeTypes;
@@ -20,9 +19,11 @@ public class PatternMatcher {
 
     public PatternMatcher() {
         this.matches = new ArrayList<>();
+        this.pathQuery = "";
         this.inputArray = new ArrayList<>();
         this.nodeTypes = new ArrayList<>();
         this.inputPatternMap = new TreeMap();
+        this.patternVariables = "";
     }
 
     public void parseNodesRelationships(String inputPath){
@@ -34,11 +35,11 @@ public class PatternMatcher {
 
             if (nodesMatcher.group(1) != null){
                 this.matches.add(nodesMatcher.group(1));
-                this.pathQuery += "(" + nodesMatcher.group(1).split(":")[0] + ")-";
+                this.pathQuery += "(" + nodesMatcher.group(1).replaceAll("\\{.*?\\}", "").trim() + ")-";
                 this.nodeTypes.add(nodesMatcher.group(1));
             } else if(nodesMatcher.group(2) != null) {
                 this.matches.add(nodesMatcher.group(2));
-                this.pathQuery += "[" + nodesMatcher.group(2) + "]->";
+                this.pathQuery += "[" + nodesMatcher.group(2).replaceAll("\\{.*?\\}", "").trim() + "]->";
             }
 
         }
@@ -66,7 +67,7 @@ public class PatternMatcher {
             }
         }
 
-        this.pathQuery += "(" + variableMatches.get(0) + ")-[:" + variableMatches.get(1) + "]->(" + variableMatches.get(2)
+        this.patternVariables += "(" + variableMatches.get(0) + ")-[:" + variableMatches.get(1) + "]->(" + variableMatches.get(2)
                 + ")";
 
     }
@@ -77,9 +78,9 @@ public class PatternMatcher {
 
         while(varMatcher.find()){
             if (varMatcher.group(1) != null)
-                inputPatternMap.put(varMatcher.group(1).split(":")[0], varMatcher.group(1).split(":")[1]);
+                inputPatternMap.put(varMatcher.group(1).split(":")[0], varMatcher.group(1).split(":")[1].replaceAll("'", ""));
             else if(varMatcher.group(2) != null)
-                inputPatternMap.put(varMatcher.group(2).split(":")[0], varMatcher.group(2).split(":")[1]);
+                inputPatternMap.put(varMatcher.group(2).split(":")[0], varMatcher.group(2).split(":")[1].replaceAll("'", ""));
         }
     }
 
@@ -109,5 +110,13 @@ public class PatternMatcher {
 
     public Map getInputPatternMap() {
         return inputPatternMap;
+    }
+
+    public String getPatternVariables() {
+        return patternVariables;
+    }
+
+    public void setPatternVariables(String patternVariables) {
+        this.patternVariables = patternVariables;
     }
 }

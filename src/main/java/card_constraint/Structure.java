@@ -17,4 +17,5 @@ public class Structure {
     public void setStructureMap(Map structureMap) {
         this.structureMap = structureMap;
     }
+
 }
