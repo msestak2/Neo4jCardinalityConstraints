@@ -9,7 +9,7 @@ import java.util.regex.Pattern;
 
 public class PatternMatcher {
 
-    private String pathQuery;
+    private String patternWithoutConditions;
     private String inputPattern;
     private String patternVariables;
     private List<String> matches;
@@ -19,7 +19,7 @@ public class PatternMatcher {
 
     public PatternMatcher() {
         this.matches = new ArrayList<>();
-        this.pathQuery = "";
+        this.patternWithoutConditions = "";
         this.inputArray = new ArrayList<>();
         this.nodeTypes = new ArrayList<>();
         this.inputPatternMap = new TreeMap();
@@ -30,21 +30,20 @@ public class PatternMatcher {
         Pattern nodesPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
         Matcher nodesMatcher = nodesPattern.matcher(inputPath);
 
-        this.pathQuery = "";
+        this.patternWithoutConditions = "";
         while(nodesMatcher.find()){
-
             if (nodesMatcher.group(1) != null){
                 this.matches.add(nodesMatcher.group(1));
-                this.pathQuery += "(" + nodesMatcher.group(1).replaceAll("\\{.*?\\}", "").trim() + ")-";
+                this.patternWithoutConditions += "(" + nodesMatcher.group(1).replaceAll("\\{.*?\\}", "").trim() + ")-";
                 this.nodeTypes.add(nodesMatcher.group(1));
             } else if(nodesMatcher.group(2) != null) {
                 this.matches.add(nodesMatcher.group(2));
-                this.pathQuery += "[" + nodesMatcher.group(2).replaceAll("\\{.*?\\}", "").trim() + "]->";
+                this.patternWithoutConditions += "[" + nodesMatcher.group(2).replaceAll("\\{.*?\\}", "").trim() + "]->";
             }
 
         }
 
-        this.pathQuery = this.pathQuery.substring(0, this.pathQuery.length()-1);
+        this.patternWithoutConditions = this.patternWithoutConditions.substring(0, this.patternWithoutConditions.length()-1);
     }
 
     public void removeConditionsFromPattern(){
@@ -84,8 +83,8 @@ public class PatternMatcher {
         }
     }
 
-    public String getPathQuery() {
-        return pathQuery;
+    public String getPatternWithoutConditions() {
+        return patternWithoutConditions;
     }
 
     public List<String> getMatches() {
