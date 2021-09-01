@@ -12,7 +12,7 @@
   <description>A template project for building Neo4j cardinality constraint procedures</description>
 
   <properties>
-    <neo4j.version>3.3.5</neo4j.version>
+    <neo4j.version>3.5.0</neo4j.version>
   </properties>
 
   <dependencies>
