@@ -11,6 +11,7 @@
     </annotationProcessing>
     <bytecodeTargetLevel>
       <module name="cardinality-constraints" target="1.8" />
+      <module name="procedure-template" target="1.8" />
     </bytecodeTargetLevel>
   </component>
 </project>

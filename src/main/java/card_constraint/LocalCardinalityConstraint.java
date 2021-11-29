@@ -1,5 +1,8 @@
 package card_constraint;
 
+import com.google.gson.JsonElement;
+import com.google.gson.annotations.SerializedName;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -8,35 +11,38 @@ public class LocalCardinalityConstraint {
 
     public long _id;
 
-    public String relType;
+    @SerializedName("N1")
+    public JsonElement node1;
 
-    public String nodeLabel;
+    @SerializedName("E1")
+    public String edge1;
 
-    public  Map subgraph;
+    @SerializedName("N2")
+    public JsonElement node2;
 
-    public  Number minKCard;
+    public int min;
 
-    public String maxKCard;
+    public String max;
 
-    public  Number k;
+    public String constraintPattern;
 
-    public Map params;
+    public String fullPattern;
 
-    public  List<LocalCardinalityConstraint> constraints = new ArrayList<>();
+    public  List<String> criteria = new ArrayList<>();
 
     public LocalCardinalityConstraint() {
     }
 
 
-    public LocalCardinalityConstraint(long id, String relType, String nodeLabel, Map subgraph, Number minKCard, String maxKCard, Number k, Map params) {
-        this._id = id;
-        this.relType = relType;
-        this.nodeLabel = nodeLabel;
-        this.subgraph = subgraph;
-        this.minKCard = minKCard;
-        this.maxKCard = maxKCard;
-        this.k = k;
-        this.params = params;
+    public LocalCardinalityConstraint(long _id, JsonElement node1, String edge1, JsonElement node2, int min, String max, String constraintPattern, String fullPattern, List<String> criteria) {
+        this._id = _id;
+        this.node1 = node1;
+        this.edge1 = edge1;
+        this.node2 = node2;
+        this.min = min;
+        this.max = max;
+        this.constraintPattern = constraintPattern;
+        this.fullPattern = fullPattern;
+        this.criteria = criteria;
     }
-
 }

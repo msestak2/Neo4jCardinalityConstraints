@@ -1,16 +1,17 @@
 package card_constraint;
-
-import au.com.bytecode.opencsv.CSVReader;
-import com.google.gson.Gson;
+import card_constraint.model.Criteria;
+import card_constraint.model.LabelSpec;
+import com.google.gson.*;
 import org.neo4j.graphdb.GraphDatabaseService;
 import org.neo4j.graphdb.Node;
 import org.neo4j.graphdb.Result;
+import org.neo4j.graphdb.Transaction;
 import org.neo4j.procedure.*;
 
-import java.io.*;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 
@@ -19,34 +20,484 @@ public class Main {
     @Context
     public GraphDatabaseService db;
 
-    //////////////////////////////////////////////////////////////////////////////////
-    /*@Procedure(value = "card_constraint.check_constraint", mode = Mode.WRITE)
-    @Description("check for relationships in database that break the cardinality constraints")
-    public void checkCardinality(@Name("filePath")String path) {
+    @Procedure(value = "card_constraint.create_edge", mode = Mode.WRITE)
+    @Description("create new edge with checking kCards")
+    public Stream<Output> createEdge(@Name("query") String query) {
+
+        String message = "";
+        boolean patternMatches = true, isMaxRuleViolated = false, isMinRuleViolated = false;
+        boolean edgeExistsDB = false, edgeExistsPattern = false;
+        String parsedSubQuery = query.split("WHERE")[0].replace(" ", "");
+        String parsedCriteriaQuery = query.split("WHERE")[1];
+
+        System.out.println("Input query pattern: " + parsedSubQuery);
+        System.out.println("Input criteria: " + parsedCriteriaQuery);
+
+        List<Criteria> inputCriteriaList = new ArrayList<>();
+        String[] inputCriteriaArray = parsedCriteriaQuery.split(" AND ");
+        for (int i = 0; i < inputCriteriaArray.length; i++) {
+            System.out.println("InputCriteriaRow: " + inputCriteriaArray[i]);
+            inputCriteriaList.add(extractCriteria(inputCriteriaArray[i]));
+        }
+
+        List<LocalCardinalityConstraint> matchingConstraints = retrieveConstraints(parsedSubQuery);
+        System.out.println("Matching constraints size: " + matchingConstraints.size());
+        if (matchingConstraints.size() != 0) {
+            for (LocalCardinalityConstraint l :
+                    matchingConstraints) {
+                List<Criteria> kCardCriteriaList = new ArrayList<>();
+
+                if (l.criteria.size() != 0) {
+                    for (String singleCriteria : l.criteria) {
+                        kCardCriteriaList.add(extractCriteria(singleCriteria));
+
+                        for (Criteria cKCard :
+                                kCardCriteriaList) {
+                            Criteria cInput = inputCriteriaList.stream().filter(c -> c.getProperty().trim().equals(cKCard.getProperty().trim())).findFirst().orElse(null);
+                            if (cInput != null) {
+                                System.out.println("CKard: " + cKCard.getProperty().trim() + ", CInput: " + cInput.getProperty().trim());
+
+                                switch (cKCard.getOperator().trim()) {
+                                    case "=":
+                                        if (!cKCard.getValue().trim().equals(cInput.getValue().trim())) {
+                                            patternMatches = false;
+                                            System.out.println("= not match");
+                                            System.out.println("cKCard value: " + cKCard.getValue().trim());
+                                            System.out.println("cInput value: " + cInput.getValue().trim());
+                                        }
+                                        break;
+                                    case ">":
+                                        if (Integer.valueOf(cInput.getValue()) <= Integer.valueOf(cKCard.getValue())) {
+                                            System.out.println("> not match");
+                                            patternMatches = false;
+                                            System.out.println("cKCard value: " + cKCard.getValue().trim());
+                                            System.out.println("cInput value: " + cInput.getValue().trim());
+                                        }
+                                        break;
+                                    case "<":
+                                        if (Integer.valueOf(cInput.getValue()) >= Integer.valueOf(cKCard.getValue())) {
+                                            System.out.println("< not match");
+                                            patternMatches = false;
+                                            System.out.println("cKCard value: " + cKCard.getValue().trim());
+                                            System.out.println("cInput value: " + cInput.getValue().trim());
+                                        }
+                                        break;
+                                }
+                            } else
+                                patternMatches = false;
+                        }
+                    }
+                }
+                System.out.println("Pattern matched: " + patternMatches);
+
+                if (patternMatches == true) {
+
+                    if (!l.max.equals("*")) { //check for max violation
+                        int numEdges = getCurrentNumberOfEdges(query);
+                        if (numEdges >= Integer.valueOf(l.max)) {
+                            isMaxRuleViolated = true;
+                            message += Output.MESSAGE_TYPE.MAX_VIOLATION.text;
+                            message += " ( Rule pattern: " + l.fullPattern;
+                            message += ", Min: " + l.min;
+                            message += ", Max: " + l.max;
+                            message += ")";
+                        }
+                    }
+                }
+            }
+        }
+
+        ArrayList<String> nodeTypes = extractNodeTypes(query);
+        for (String nodeType :
+                nodeTypes) {
+            LocalCardinalityConstraint kCard = getMatchingNodeConstraint(nodeType);
+            if (kCard.min == 1) {
+                // check DB
+                String kCardAlias = "";
+                if (kCard.node1.getAsString().equals("\"" + nodeType + "\""))
+                    kCardAlias = "N1";
+                else
+                    kCardAlias = "N2";
+
+
+                ArrayList<String> subCriteriaList = new ArrayList<>();
+                String subCriteriaPattern = query.substring(query.indexOf("WHERE ") + 6);
+                System.out.println("SubCriteriaPattern: " + subCriteriaPattern);
+                String[] criteriaRow = subCriteriaPattern.split(" AND ");
+                for (String s :
+                        criteriaRow) {
+                    if (s.contains(kCardAlias)) {
+                        subCriteriaList.add(s.trim());
+                    }
+                }
+
+                edgeExistsDB = checkEdgeInDB(kCard.constraintPattern, subCriteriaList, kCardAlias);
+                System.out.println("Edge exists in DB: " + edgeExistsDB);
+
+
+                // check pattern
+                edgeExistsPattern = checkEdgeInPattern(query, kCard.constraintPattern, nodeType);
+                System.out.println("Edge exists in pattern: " + edgeExistsPattern);
+
+                if (edgeExistsDB == false && edgeExistsPattern == false) {
+                    isMinRuleViolated = true;
+                    message += Output.MESSAGE_TYPE.MIN_VIOLATION.text;
+                    message += " ( Rule pattern: " + kCard.fullPattern;
+                    message += ", Min: " + kCard.min;
+                    message += ", Max: " + kCard.max;
+                    message += ")";
+                }
+            }
+        }
+
+        if (isMaxRuleViolated == false && isMinRuleViolated == false) {
+            message += Output.MESSAGE_TYPE.SUCCESS.text;
+
+            String dbQuery = buildDBQuery(query, inputCriteriaList);
+            System.out.println("DB query: " + dbQuery);
+
+            db.executeTransactionally(dbQuery);
+        }
+
+        return Stream.of(new Output(message));
+    }
+
+
+    private String buildDBCountQuery(String inputPattern) {
+        /*Pattern relLabelPattern = Pattern.compile("\\[(.*?)\\]");
+        Matcher relLabelMatcher = relLabelPattern.matcher(inputPattern);
+        List<String> matches = new ArrayList<>();
+
+        while(relLabelMatcher.find()){
+            matches.add(relLabelMatcher.group(1).split(":")[0]);
+        }
+
+        String relationshipLabel = matches.get(0);*/
+
+        String countQuery = "MATCH " + inputPattern + " RETURN COUNT(E1) as number";
+
+        return countQuery;
+    }
+
+    public int getCurrentNumberOfEdges(String inputPattern) {
+        long numEdges = 0;
+
+        String countQuery = buildDBCountQuery(inputPattern);
+
+        System.out.println("Count query: " + countQuery);
+        try (Transaction tx = db.beginTx()) {
+            Result countResult = tx.execute(countQuery);
+
+            if (countResult.hasNext()) {
+                while (countResult.hasNext()) {
+                    numEdges = (long) countResult.next().get("number");
+
+                    System.out.println("[CREATE] NumEdges: " + numEdges);
+                }
+            }
+        }
+
+        return (int) numEdges;
+    }
+
+    public HashMap<String, ArrayList> getGroupedNumberOfEdge(String inputPattern) {
+
+        HashMap<String, ArrayList> results = new HashMap<>();
+        try (Transaction tx = db.beginTx()) {
+            Result countResult = tx.execute(inputPattern + "  WITH type(E1) as edge, {node: N1, number: COUNT(E1)} as nodes return edge, collect(nodes) as result");
+
+            while(countResult.hasNext()) {
+                Map<String, Object> entry = countResult.next();
+
+                String edgeType = entry.get("edge").toString();
+                System.out.println("edge: " + edgeType);
+
+                ArrayList row = (ArrayList) entry.get("result");
+
+                results.put(edgeType, row);
+            }
+        }
+        System.out.println("Results size: " + results.size());
+        /*Iterator it = results.entrySet().iterator();
+        while(it.hasNext()){
+            Map.Entry e = (Map.Entry) it.next();
+            System.out.println("entry: " + e.getKey() +  " value count: " + ((ArrayList)e.getValue()).size());
+
+            for (Object o:
+                    (ArrayList)e.getValue()) {
+                Map m = (Map)o;
+                System.out.println("Node: " + m.get("node") + ", number: " + m.get("number"));
+            }
+        }*/
+        return results;
+    }
+
+    public Criteria extractCriteria(String criteriaRow) {
+        criteriaRow = criteriaRow.replace("[", "").replace("]", "");
+        System.out.println("SingleCriteria: " + criteriaRow);
+        String[] singleCriteriaSplit = criteriaRow.split("[=\\<\\>]"); //TODO: only simple comparison operators
+        String operator = criteriaRow.substring(criteriaRow.indexOf(singleCriteriaSplit[1]) - 1, criteriaRow.indexOf(singleCriteriaSplit[1]));
+        System.out.println("K: " + singleCriteriaSplit[0] + ", op: " + operator + ", V: " + singleCriteriaSplit[1]);
+
+        return new Criteria(singleCriteriaSplit[0], operator, singleCriteriaSplit[1]);
+    }
+
+    public ArrayList<String> extractNodeTypes(String inputPattern) {
+        ArrayList<String> nodeTypes = new ArrayList<>();
+
+        Pattern nodesPattern = Pattern.compile("\\((.*?)\\)");
+        Matcher nodesMatcher = nodesPattern.matcher(inputPattern);
+        while (nodesMatcher.find()) {
+            nodeTypes.add(nodesMatcher.group(1).split(":")[1]);
+        }
+
+        for (String s :
+                nodeTypes) {
+            System.out.println("Node types in input Pattern: " + s);
+        }
+
+        return nodeTypes;
+    }
+
+    public boolean checkEdgeInDB(String inputPattern, ArrayList<String> criteriaList, String alias) {
+        boolean edgeExists = false;
+        String dbQuery = "MATCH p=" + inputPattern + " WHERE ";
+        for (String s :
+                criteriaList) {
+            if (criteriaList.indexOf(s) != criteriaList.size() - 1) {
+                dbQuery += alias + s.substring(s.indexOf(".")) + " AND";
+            } else {
+                dbQuery += alias + s.substring(s.indexOf("."));
+            }
+        }
+        dbQuery += " RETURN p";
+        System.out.println("DB QUERY 1: " + dbQuery);
+
+        try (Transaction tx = db.beginTx()) {
+            Result dbResults = tx.execute(dbQuery);
+
+            if (dbResults.hasNext())
+                edgeExists = true;
+        }
+        return edgeExists;
+    }
+
+    public boolean checkEdgeInPattern(String inputPattern, String constraintPattern, String nodeType) {
+        boolean patternContainsEdge = false;
+
+        System.out.println("Node type: " + nodeType);
+        ArrayList<String> inputPatternList = extractPatternElements(inputPattern);
+        ArrayList<String> kCardPatternList = extractPatternElements(constraintPattern);
+
+        for (String s :
+                inputPatternList) {
+            System.out.println("Input pattern elements: " + s);
+        }
+
+        for (String s :
+                kCardPatternList) {
+            System.out.println("Constraint pattern elements: " + s);
+        }
+
+        int index = inputPatternList.indexOf(nodeType);
+        if (kCardPatternList.contains(nodeType)) {
+            int kCardIndex = kCardPatternList.indexOf(nodeType);
+
+            System.out.println("Input pattern edge: " + inputPatternList.get(index + 1));
+            System.out.println("Constraint pattern edge: " + kCardPatternList.get(kCardIndex + 1));
+            if (inputPatternList.get(index + 1).trim().equals(kCardPatternList.get(kCardIndex + 1).trim()))
+                patternContainsEdge = true;
+        }
+        return patternContainsEdge;
+    }
+
+    public String buildDBQuery(String inputPattern, List<Criteria> criteria) {
+        String query = "";
+        Pattern varPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
+        Matcher varMatcher = varPattern.matcher(inputPattern);
+
+        ArrayList<String> elementsList = new ArrayList<>();
+        while (varMatcher.find()) {
+            if (varMatcher.group(1) != null) {
+                List<Criteria> cList = new ArrayList<Criteria>();
+                for (Criteria c :
+                        criteria) {
+                    if (c.getProperty().contains(varMatcher.group(1).split(":")[0]))
+                        cList.add(c);
+                }
+                System.out.println("cList size: " + cList.size());
+                query += "MATCH (" + varMatcher.group(1);
+                String criteriaString = "{";
+                for (Criteria c : cList) {
+                    if (cList.indexOf(c) == (cList.size()) - 1) {
+                        if (c.getOperator().equals("="))
+                            criteriaString += c.getProperty().substring(c.getProperty().indexOf(".") + 1) +
+                                    ": " + c.getValue();
+                        else
+                            query += c.getProperty().substring(c.getProperty().indexOf(".") + 1) +
+                                    c.getOperator() + c.getValue();
+                    } else {
+                        if (c.getOperator().equals("="))
+                            criteriaString += c.getProperty().substring(c.getProperty().indexOf(".") + 1) +
+                                    ": " + c.getValue() + ", ";
+                        else
+                            query += c.getProperty().substring(c.getProperty().indexOf(".") + 1) +
+                                    c.getOperator() + c.getValue() + ", ";
+                    }
+
+                }
+                query += criteriaString + "}) ";
+                elementsList.add(varMatcher.group(1).split(":")[0]);
+            } else if (varMatcher.group(2) != null)
+                elementsList.add(varMatcher.group(2));
+        }
+        query += " CREATE p=";
+
+        query += "(" + elementsList.get(0) + ")-[" + elementsList.get(1) + "]->(" + elementsList.get(2) + ")";
+
+        query += " RETURN p";
+        return query;
+    }
+
+    public LocalCardinalityConstraint getMatchingNodeConstraint(String nodeType) {
+        LocalCardinalityConstraint kCard = new LocalCardinalityConstraint();
+        List<String> criteria = new ArrayList<>();
+
+        Gson gson = new Gson();
+        try (Transaction tx = db.beginTx()) {
+            String query = "MATCH (c:KCard) WHERE c.N1='\"" + nodeType + "\"' OR c.N2='\"" + nodeType + "\"' RETURN c";
+            System.out.println("Node matching query: " + query);
+            Result resultKCard = tx.execute(query);
+
+            Iterator it = resultKCard.stream().iterator();
+            while (it.hasNext()) {
+                Map<String, Object> row = (Map<String, Object>) it.next();
+                Node n = (Node) row.get("c");
+
+                long id = ((Number) n.getId()).longValue();
+                JsonElement node1 = gson.toJsonTree(n.getProperty("N1"));
+                String edge1 = n.getProperty("E1").toString();
+                JsonElement node2 = gson.toJsonTree(n.getProperty("N2"));
+                int min = Integer.valueOf(n.getProperty("min").toString());
+                String max = n.getProperty("max").toString();
+                String constraintPattern = n.getProperty("constraintPattern").toString();
+                String fullPattern = n.getProperty("fullPattern").toString();
+                System.out.println("fullPattern: " + fullPattern);
+                criteria = new ArrayList<String>(Arrays.asList(n.getProperty("criteria").toString().split(",")));
+                System.out.println("criteria: " + criteria);
+                kCard = new LocalCardinalityConstraint(id, node1,
+                        edge1, node2, min, max, constraintPattern, fullPattern, criteria);
+            }
+        }
+        return kCard;
+    }
+
+    public ArrayList<String> extractPatternElements(String pattern) {
+        ArrayList<String> patternElements = new ArrayList<>();
+        Pattern varPattern = Pattern.compile("\\((.*?)\\)|\\[(.*?)\\]");
+        Matcher varMatcher = varPattern.matcher(pattern);
+
+        while (varMatcher.find()) {
+            if (varMatcher.group(1) != null)
+                patternElements.add(varMatcher.group(1).split(":")[1].replaceAll("\"", ""));
+            else if (varMatcher.group(2) != null)
+                patternElements.add(varMatcher.group(2).split(":")[1].replaceAll("\"", ""));
+        }
+        return patternElements;
+    }
+
+    public List<LocalCardinalityConstraint> retrieveConstraints(String inputQueryPattern) {
+        List<LocalCardinalityConstraint> constraints = new ArrayList<>();
+        Gson gson = new Gson();
+        List<String> criteria = new ArrayList<>();
+
+        String query = "";
+        if(inputQueryPattern != null){
+            query = "MATCH (c:KCard) WHERE c.constraintPattern = '" + inputQueryPattern + "' RETURN c";
+        }
+        else
+            query = "MATCH (c:KCard) RETURN c";
+
+        try (Transaction tx= db.beginTx()) {
+
+            Result result = tx.execute(query);
+
+            while (result.hasNext()) {
+                Map<String, Object> row = result.next();
+                Node n = (Node) row.get("c");
+
+                long id = ((Number) n.getId()).longValue();
+                JsonElement node1 = gson.toJsonTree(n.getProperty("N1"));
+                String edge1 = n.getProperty("E1").toString();
+                JsonElement node2 = gson.toJsonTree(n.getProperty("N2"));
+                int min = Integer.valueOf(n.getProperty("min").toString());
+                String max = n.getProperty("max").toString();
+                String constraintPattern = n.getProperty("constraintPattern").toString();
+                String fullPattern = n.getProperty("fullPattern").toString();
+                System.out.println("fullPattern: " + fullPattern);
+                criteria = new ArrayList<String>(Arrays.asList(n.getProperty("criteria").toString().split(",")));
+                System.out.println("criteria: " + criteria);
+                LocalCardinalityConstraint constraint = new LocalCardinalityConstraint(id, node1,
+                        edge1, node2, min, max, constraintPattern, fullPattern, criteria);
+
+                constraints.add(constraint);
+            }
+            System.out.println("constraints list size: " + constraints.size());
+            return constraints;
+        }
+    }
+
+    @Procedure(value = "card_constraint.check_kcard", mode = Mode.WRITE)
+    @Description("check for edges in database that break the cardinality constraints")
+    public Stream<OutputLabels> checkCardinality(@Name("labelSpec") String labelSpec) {
+        JsonParser jsonParser = new JsonParser();
+        JsonArray inputLabelSpecArray = (JsonArray) jsonParser.parse(labelSpec);
+        System.out.println("Number of label specs: " + inputLabelSpecArray.size());
+
+        String outputLabels = "";
+        ArrayList<LabelSpec> labelSpecs = new ArrayList<>();
+
+        for(int i = 0; i < inputLabelSpecArray.size(); i++){
+            JsonObject jo = (JsonObject) inputLabelSpecArray.get(i);
+            labelSpecs.add(new LabelSpec(jo.get("edge").toString(), jo.get("min").getAsInt(), jo.get("max").getAsInt(), jo.get("label").toString()));
+        }
+
+        System.out.println("LabelSpecs size: " + labelSpecs.size());
+
         List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
 
-        Iterator iterator = constraints.iterator();
-        List<Relationship> listRegularRels = new ArrayList<>();
-        List<String> outputResult = new ArrayList<>();
+        HashMap<String, ArrayList> edgeCountMap = new HashMap<>();
+        List<LabelSpec> labelSpecsList = new ArrayList<>();
 
-        List<String> outputDeleteCmds = new ArrayList<>();
+        for (LocalCardinalityConstraint c:
+             constraints) {
+            edgeCountMap.clear();
+            labelSpecsList.clear();
+            edgeCountMap = getGroupedNumberOfEdge(c.fullPattern);
 
-        Map<String, Integer> dataMap = new HashMap<>();
+            labelSpecsList = labelSpecs.stream().filter(spec -> spec.edge.equals(c.edge1)).collect(Collectors.toList());
+            System.out.println("Label spec list size: " + labelSpecsList.size());
 
-        Set<Relationship> uniqueRedundantRels = new HashSet<>();
-        while (iterator.hasNext()) {
-            dataMap.clear();
-            listRegularRels.clear();
-            uniqueRedundantRels.clear();
+            System.out.println("Edge1: " +c.edge1);
+            ArrayList nodesForEdge = edgeCountMap.get(c.edge1.trim().replace("\"", ""));
+            System.out.println("NodesForEdge size: " + nodesForEdge.size());
+            for (Object o: nodesForEdge) {
+                Map m = (Map)o;
+                System.out.println("Number: "  + m.get("number"));
+                for (LabelSpec spec:
+                     labelSpecsList) {
+                    if(spec.getMin() == c.min && spec.getMax() == Integer.valueOf(c.max)) {
+                        if ((long)m.get("number") >= spec.min && (long)m.get("number") <= spec.max) {
+                            outputLabels += "KCard ID<" + c._id + "> - Node ID<" + ((Node)m.get("node")).getId() + ">: " + spec.label + "\n";
+                        }
+                    }
+                }
+            }
+        }
 
-            LocalCardinalityConstraint c = (LocalCardinalityConstraint) iterator.next();
-
-            String constraintPattern= "(n1:" + c.nodeLabel + ")-[r1:" + c.relType + "]->";
-            constraintPattern = buildSubgraphPattern(2, constraintPattern, c.subgraph);
-
-            System.out.println("\n[CHECK] Constraint:  " + constraintPattern);
-
-            */
+        return Stream.of(new OutputLabels(outputLabels));
+    }
+}
 /*
             Pattern nodesPattern = Pattern.compile("\\((.*?)\\)");
             Matcher nodesMatcher = nodesPattern.matcher(constraintPattern);
@@ -133,468 +584,4 @@ public class Main {
         }
     }*/
 
-    //////////////////////////////////////////////////////////////////////////////////
-    @Procedure(value = "card_constraint.create_relationship", mode = Mode.WRITE)
-    @Description("create new relationship")
-    public Stream<Output> createRelationship(@Name("query") String query, @Name("constraint_mode")String mode) {
-        String message = "";
-
-        PatternMatcher matcher = new PatternMatcher();
-
-        /**
-         * Parse input string and get nodes and relationships
-         */
-        matcher.parseNodesRelationships(query);
-
-
-        String inputPattern = "";
-        List<String> matches = matcher.getMatches();
-
-        int numNodes = 0;
-
-        String dbQueryNoCard = "MATCH ", dbQueryCard = "MATCH ";
-
-        for(int i = 0; i<matches.size(); i++){
-            numNodes++;
-
-            if(matches.size() > i+1){
-                dbQueryNoCard += "(" + matches.get(i) + "), ";
-                dbQueryCard += "(" + matches.get(i) + "), ";
-
-                inputPattern += "(" + matches.get(i) + ")-[" + matches.get(++i) + "]->";
-
-            } else{
-                inputPattern += "(" + matches.get(i) + ")";
-                dbQueryNoCard += "(" + matches.get(i) + ")";
-                dbQueryCard += "(" + matches.get(i) + ")";
-
-            }
-        }
-        matcher.setInputPattern(inputPattern);
-
-        System.out.println("Input pattern: " + inputPattern);
-
-        // no cardinality check
-        if(mode.toLowerCase().equals("no_cardinality")){
-            System.out.println("[CREATE NO CARDINALITY]");
-
-            matcher.removeConditionsFromPattern();
-            String pathQuery = matcher.getPatternVariables();
-
-            dbQueryNoCard += " CREATE " + pathQuery;
-            System.out.println("[CREATE] DB query: " + dbQueryNoCard);
-            db.execute(dbQueryNoCard);
-            message = Output.MESSAGE_TYPE.SUCCESS.text;
-        } else{
-            System.out.println("[CREATE CARDINALITY]");
-
-            boolean isRuleViolated = false;
-
-            /**
-             * Remove conditions to compare patterns
-             */
-            Pattern conditionsPattern = Pattern.compile("\\{(.*?)\\}");
-            Matcher conditionsMatcher = conditionsPattern.matcher(query);
-
-            while(conditionsMatcher.find()){
-                if (conditionsMatcher.group(1).contains(",")) {
-                    String[] singleConditions = conditionsMatcher.group(1).split(",");
-                    for (int i = 0; i < singleConditions.length; i++)
-                        matcher.inputPatternMap.put(singleConditions[i].split(":")[0].trim(), singleConditions[i].split(":")[1].replaceAll("'", "").trim());
-                } else
-                    matcher.inputPatternMap.put(conditionsMatcher.group(1).split(":")[0].trim(), conditionsMatcher.group(1).split(":")[1].replaceAll("'", "").trim());
-            }
-
-            matcher.removeConditionsFromPattern();
-            matcher.buildMapFromInputPattern();
-
-            List<String> nodeTypes = matcher.getNodeTypes();
-
-            List<LocalCardinalityConstraint> constraints = retrieveConstraints(null);
-
-            boolean relExistsDB, relExistsPattern = true;
-
-            int numRels = 0;
-            for (LocalCardinalityConstraint constraint:
-                 constraints) {
-                // check for min
-
-                TreeMap constraintMap = new TreeMap();
-                constraintMap.put("E", constraint.nodeLabel);
-                constraintMap.put("R", constraint.relType);
-                constraintMap.put("S", constraint.subgraph);
-
-                Structure structure = new Structure();
-                Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
-                structure.structureMap.putAll(recurConstraintMap);
-
-                String constraintPattern = "(n1:" + constraint.nodeLabel + ")-[r1:" + constraint.relType + "]->";
-
-                constraintPattern = buildConstraintPattern(2, constraintPattern, constraint.subgraph, constraint.params);
-
-                if(constraint.minKCard.intValue() == 1){
-                    for (String inputNode:
-                         nodeTypes) {
-                        String nodeType = inputNode.split(":")[1].substring(0, inputNode.split(":")[1].indexOf("{"));
-
-                        if(nodeType.trim().toLowerCase().equals(constraint.nodeLabel.toLowerCase())){
-
-                            relExistsDB = checkRelationshipExistence(inputNode, constraintPattern);
-                            System.out.println("EXISTS in DB: " + relExistsDB);
-
-                            if(relExistsDB == false){
-                                relExistsPattern = checkRelationshipInputPattern(matcher, constraint);
-                                System.out.println("EXISTS in input pattern: " + relExistsPattern);
-
-                                if(relExistsPattern == false){
-                                    isRuleViolated = true;
-                                    message += Output.MESSAGE_TYPE.MIN_VIOLATION.text;
-                                    message += " ( Node label: " + constraint.nodeLabel;
-                                    message += ", Relationship type:  " + constraint.relType;
-                                    message += ", Subgraph: " + constraint.subgraph;
-                                    message += ", Min: " + constraint.minKCard;
-                                    message += ", Max: " + constraint.maxKCard;
-
-                                    if (constraint.params != null)
-                                        message += ", Params: " + constraint.params;
-                                    message += ")";
-                                }
-                            }
-                        }
-                    }
-                }
-
-                    // check for max
-
-                if (!constraint.maxKCard.equals("*")) {
-                    System.out.println("Input pattern structure: " + matcher.getPatternWithoutConditions());
-
-                    constraintPattern = constraintPattern.replaceAll("\\{.*?\\}", "");
-                    constraintPattern = constraintPattern.replaceAll("\\,", "");
-                    constraintPattern = constraintPattern.replaceAll("\\ ", "");
-                    System.out.println("Constraint structure: " + constraintPattern);
-
-                    if (matcher.getPatternWithoutConditions().equals(constraintPattern)) {
-
-                        if (matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())) {
-                            numRels = getCurrentNumberOfRels(inputPattern);
-
-                            if (numRels >= Integer.parseInt(constraint.maxKCard)) {
-                                isRuleViolated = true;
-                                message += Output.MESSAGE_TYPE.MAX_VIOLATION.text;
-                                message += " ( Node label: " + constraint.nodeLabel;
-                                message += ", Relationship type:  " + constraint.relType;
-                                message += ", Subgraph: " + constraint.subgraph;
-                                message += ", Min: " + constraint.minKCard;
-                                message += ", Max: " + constraint.maxKCard;
-
-                                if (constraint.params != null)
-                                    message += ", Params: " + constraint.params;
-                                message += ")";
-                            }
-                        } else {
-                            System.out.println("Hello");
-                            isRuleViolated = true;
-                            message += Output.MESSAGE_TYPE.CONSTRAINT_VIOLATION.text;
-                            message += " ( Node label: " + constraint.nodeLabel;
-                            message += ", Relationship type:  " + constraint.relType;
-                            message += ", Subgraph: " + constraint.subgraph;
-                            message += ", Min: " + constraint.minKCard;
-                            message += ", Max: " + constraint.maxKCard;
-
-                            if (constraint.params != null)
-                                message += ", Params: " + constraint.params;
-                            message += ")";
-                        }
-                    }
-                }
-
-            }
-
-            if (isRuleViolated == false) {
-                dbQueryCard += " CREATE " + matcher.getPatternWithoutConditions();
-                System.out.println("[CREATE] DB query: " + dbQueryCard);
-                db.execute(dbQueryCard);
-                message += Output.MESSAGE_TYPE.SUCCESS.text;
-            }
-        }
-        return Stream.of(new Output(message));
-    }
-
-    private String buildConstraintPattern(int recursionLevel, String constraintPattern, Map<String, Object> subgraphMap,
-                                          Map<String, Object> params){
-        TreeMap sortedMap = new TreeMap();
-        sortedMap.putAll(subgraphMap);
-
-        Iterator it = null, localIt = null;
-
-        for(Object entry : sortedMap.entrySet()){
-            Map.Entry property = (Map.Entry)entry;
-
-            if(params != null) {
-                it = params.entrySet().iterator();
-            }
-
-            switch(property.getKey().toString()){
-                case "E":
-                    constraintPattern += "(n" + recursionLevel + ":" + property.getValue();
-
-                    if(params != null){
-                        while(it.hasNext()){
-                            Map.Entry paramEntry = (Map.Entry) it.next();
-
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
-
-                            if (paramEntryLevel == recursionLevel) {
-                                Map localParams = (Map)paramEntry.getValue();
-
-                                localIt = localParams.entrySet().iterator();
-                                while(localIt.hasNext()){
-                                    Map.Entry localEntry = (Map.Entry)localIt.next();
-                                    if(localEntry.getKey().toString().equals("E")){
-                                        List<Map> paramsList = (List<Map>)localEntry.getValue();
-                                        for (Map paramsMap:
-                                                paramsList) {
-                                            if(paramsList.indexOf(paramsMap) == paramsList.size() - 1)
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}";
-                                            else
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}, ";
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    constraintPattern +=  ")";
-                    break;
-                case "R":
-                    constraintPattern += "-[r" + recursionLevel + ":" + property.getValue();
-
-                    if(params != null){
-                        while(it.hasNext()){
-
-                            Map.Entry paramEntry = (Map.Entry) it.next();
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
-
-                            if (paramEntryLevel == recursionLevel) {
-                                Map localParams = (Map)paramEntry.getValue();
-
-                                localIt = localParams.entrySet().iterator();
-                                while(localIt.hasNext()){
-                                    Map.Entry localEntry = (Map.Entry)localIt.next();
-
-                                    if(localEntry.getKey().toString().equals("R")){
-                                        List<Map> paramsList = (List<Map>)  localEntry.getValue();
-                                        for (Map paramsMap:
-                                                paramsList) {
-                                            if(paramsList.indexOf(paramsMap) == paramsList.size() - 1)
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}";
-                                            else
-                                                constraintPattern += " {" + paramsMap.get("prop") + ":'" + paramsMap.get("value") + "'}, ";
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    constraintPattern += "]->";
-
-                    break;
-                case "S":
-                    Map sMap = (Map) property.getValue();
-
-                    constraintPattern = buildConstraintPattern((recursionLevel+1), constraintPattern, sMap, params);
-                    break;
-                default:
-                    return constraintPattern;
-            }
-        }
-        return constraintPattern;
-    }
-
-    private Map buildMapStructure(int recursionLevel, Map subgraphMap, Map structureMap, Map params){
-        TreeMap sortedMap = new TreeMap();
-        sortedMap.putAll(subgraphMap);
-
-        Iterator it = null, localIt = null;
-
-        for(Object entry : sortedMap.entrySet()){
-            Map.Entry property = (Map.Entry)entry;
-
-            if(params != null) {
-                it = params.entrySet().iterator();
-            }
-
-            switch(property.getKey().toString()){
-                case "E":
-                    structureMap.put("n" + recursionLevel, property.getValue().toString());
-
-                    if(params != null){
-                        while(it.hasNext()){
-                            Map.Entry paramEntry = (Map.Entry) it.next();
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
-
-                            if (paramEntryLevel == recursionLevel) {
-                                Map localParams = (Map)paramEntry.getValue();
-
-                                localIt = localParams.entrySet().iterator();
-                                while(localIt.hasNext()){
-                                    Map.Entry localEntry = (Map.Entry)localIt.next();
-                                    if(localEntry.getKey().toString().equals("E")){
-                                        List<Map> paramsList = (List<Map>)localEntry.getValue();
-                                        for (Map paramsMap:
-                                                paramsList) {
-                                            structureMap.put(paramsMap.get("prop").toString(), paramsMap.get("value").toString());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    break;
-                case "R":
-                    structureMap.put("r"+ recursionLevel, property.getValue().toString());
-
-                    if(params != null){
-                        while(it.hasNext()){
-                            Map.Entry paramEntry = (Map.Entry) it.next();
-
-                            int paramEntryLevel = Integer.valueOf(paramEntry.getKey().toString().substring(1, 2));
-                            if (paramEntryLevel == recursionLevel) {
-                                Map localParams = (Map)paramEntry.getValue();
-
-                                localIt = localParams.entrySet().iterator();
-                                while(localIt.hasNext()){
-                                    Map.Entry localEntry = (Map.Entry)localIt.next();
-                                    if(localEntry.getKey().toString().equals("R")){
-                                        List<Map> paramsList = (List<Map>)localEntry.getValue();
-                                        for (Map paramsMap:
-                                                paramsList) {
-                                            structureMap.put(paramsMap.get("prop").toString(), paramsMap.get("value").toString());
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                  //  System.err.println("Structure Map " +  recursionLevel + ": " + structureMap.values());
-
-                    break;
-                case "S":
-                    Map sMap = (Map) property.getValue();
-                    recursionLevel = recursionLevel + 1;
-                    structureMap = buildMapStructure(recursionLevel, sMap, structureMap, params);
-                    break;
-                default:
-                    return structureMap;
-            }
-        }
-        return structureMap;
-    }
-
-    private String buildDBCountQuery(String inputPattern){
-        String strippedInput = inputPattern.replaceAll("\\{.*?\\}", "");
-
-        Pattern relLabelPattern = Pattern.compile("\\[(.*?)\\]");
-        Matcher relLabelMatcher = relLabelPattern.matcher(strippedInput);
-        List<String> matches = new ArrayList<>();
-
-        while(relLabelMatcher.find()){
-            matches.add(relLabelMatcher.group(1).split(":")[0]);
-        }
-
-        String relationshipLabel = matches.get(0);
-
-        String countQuery = "MATCH " + inputPattern + " RETURN COUNT(" + relationshipLabel + ") as number";
-
-        return countQuery;
-    }
-
-    public int getCurrentNumberOfRels(String inputPattern) {
-        long numRels = 0;
-
-        String countQuery = buildDBCountQuery(inputPattern);
-
-        System.out.println("Count query: " + countQuery);
-        Result countResult = db.execute(countQuery);
-
-        if (countResult.hasNext()) {
-            while (countResult.hasNext()) {
-                numRels = (long) countResult.next().get("number");
-
-                System.out.println("[CREATE] Numrels: " + numRels);
-            }
-        }
-
-        return (int)numRels;
-    }
-
-    public boolean checkRelationshipExistence(String startNode, String pattern) {
-        boolean existsRel = false;
-
-        pattern = pattern.substring(pattern.indexOf("-"),pattern.length());
-        String dbQuery = "MATCH p=(" + startNode + ")" + pattern + " RETURN p";
-        Result dbResults = db.execute(dbQuery);
-
-        if (dbResults.hasNext())
-            existsRel = true;
-        return existsRel;
-    }
-
-    public boolean checkRelationshipInputPattern(PatternMatcher matcher, LocalCardinalityConstraint constraint){
-        boolean existsRel = false;
-
-        TreeMap constraintMap = new TreeMap();
-        constraintMap.put("E", constraint.nodeLabel);
-        constraintMap.put("R", constraint.relType);
-        constraintMap.put("S", constraint.subgraph);
-
-        Structure structure = new Structure();
-        Map recurConstraintMap = buildMapStructure(1, constraintMap, structure.structureMap, constraint.params);
-        structure.structureMap.putAll(recurConstraintMap);
-
-        //build structure map for constraint pattern query
-
-        if(matcher.inputPatternMap.entrySet().containsAll(structure.structureMap.entrySet())){
-            existsRel = true;
-        }
-
-        return existsRel;
-    }
-
-    public List<LocalCardinalityConstraint> retrieveConstraints(String condition) {
-        List<LocalCardinalityConstraint> constraints = new ArrayList<>();
-        Gson gson = new Gson();
-        Map<String, Object> map = new HashMap<>();
-
-        Result resultConstraints = null;
-        if (condition != null)
-            resultConstraints = db.execute("MATCH (c:CardinalityConstraint) WHERE c.E = '" + condition + "' RETURN c");
-        else
-            resultConstraints = db.execute("MATCH (c:CardinalityConstraint) RETURN c");
-
-        while (resultConstraints.hasNext()) {
-            Map<String, Object> row = resultConstraints.next();
-            Node n = (Node) row.get("c");
-            long id = n.getId();
-            String relType = n.getProperty("R").toString();
-            String nodeLabel = n.getProperty("E").toString();
-            map = gson.fromJson(n.getProperty("S").toString(), map.getClass());
-            Number min = (long) n.getProperty("min");
-            String max = n.getProperty("max").toString();
-            Number k = (long) n.getProperty("k");
-
-            Map params = null;
-            if(n.hasProperty("params"))
-               params = gson.fromJson(n.getProperty("params").toString(), map.getClass());
-            LocalCardinalityConstraint constraint = new LocalCardinalityConstraint(id, relType, nodeLabel, map, min, max, k, params);
-
-            constraints.add(constraint);
-        }
-        return constraints;
-    }
-}
 
